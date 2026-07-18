@@ -1,0 +1,12 @@
+{
+  "name": "rydercup-api",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/server.js",
+  "dependencies": {
+    "express": "^5.2.1",
+    "cors": "^2.8.6",
+    "mysql2": "^3.22.5",
+    "@anthropic-ai/sdk": "^0.110.0"
+  }
+}

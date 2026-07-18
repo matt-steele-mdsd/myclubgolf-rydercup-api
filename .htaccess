@@ -1,0 +1,16 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home/ueyyvlw94xm4/rydercup-api"
+PassengerBaseURI "/"
+PassengerNodejs "/home/ueyyvlw94xm4/nodevenv/rydercup-api/24/bin/node"
+PassengerAppType node
+PassengerStartupFile dist/server.js
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION BEGIN
+<IfModule Litespeed>
+SetEnv NODE_ENV production
+SetEnv DB_HOST 68.178.198.174
+SetEnv DB_USER myclubadmin
+SetEnv DB_PASSWORD MyS0nisaPilot
+SetEnv DB_NAME rydercup
+</IfModule>
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION END
