@@ -47,6 +47,11 @@ function getRealPool() {
             user: process.env.DB_USER,
             password: process.env.DB_PASSWORD,
             database: process.env.DB_NAME || 'myclubgolf',
+            // mysql2's default is 10 -- getRyderLeaderboard alone now fires 5 queries in parallel per
+            // request (see its own comment), so with several people watching the live leaderboard at
+            // once, the default limit would start queueing requests behind each other right at the
+            // moment speed matters most.
+            connectionLimit: 20,
         });
     }
     return realPool;

@@ -76,22 +76,6 @@ app.get('/api/ryder/roster-status', async (req, res) => {
         res.status(500).json({ error: 'Failed to check roster status' });
     }
 });
-// The actual saved roster for a year/group (Course & Roster's "Players" section)
-app.get('/api/ryder/year-roster', async (req, res) => {
-    try {
-        const year = parseInt(req.query.year);
-        const groupId = parseInt(req.query.group || '1');
-        if (!year) {
-            return res.status(400).json({ error: 'year query param is required' });
-        }
-        const roster = await (0, ryderService_1.getYearRoster)(groupId, year);
-        res.json(roster);
-    }
-    catch (error) {
-        console.error('Error fetching year roster:', error.message);
-        res.status(500).json({ error: 'Failed to fetch year roster' });
-    }
-});
 // Get a year's Ryder Cup results (standings, sessions, player points) endpoint
 app.get('/api/ryder/results', async (req, res) => {
     try {
@@ -123,6 +107,41 @@ app.get('/api/ryder/leaderboard', async (req, res) => {
     catch (error) {
         console.error('Error fetching Ryder leaderboard:', error.message);
         res.status(500).json({ error: 'Failed to fetch Ryder leaderboard' });
+    }
+});
+// Which team (if any) has clinched the Cup outright this year, and the specific match that
+// did it -- see getRyderClinchInfo. Null when it hasn't been decided yet.
+app.get('/api/ryder/clinch', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const info = await (0, ryderService_1.getRyderClinchInfo)(year, groupId);
+        res.json(info);
+    }
+    catch (error) {
+        console.error('Error fetching Ryder clinch info:', error.message);
+        res.status(500).json({ error: 'Failed to fetch Ryder clinch info' });
+    }
+});
+// Every completed match for the year, in recording order -- see getRyderCompletedMatches. Used
+// client-side to detect matches finishing while someone's watching one of the live screens, for
+// the per-match "Congratulations"/"Match Tied" celebration.
+app.get('/api/ryder/completed-matches', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const matches = await (0, ryderService_1.getRyderCompletedMatches)(year, groupId);
+        res.json(matches);
+    }
+    catch (error) {
+        console.error('Error fetching Ryder completed matches:', error.message);
+        res.status(500).json({ error: 'Failed to fetch Ryder completed matches' });
     }
 });
 // Get a single match's hole-by-hole scorecard
@@ -202,14 +221,11 @@ app.get('/api/ryder/sessions', async (req, res) => {
 // Create a new session for a year/group (Admin -> Setup Sessions "+ Add Session")
 app.post('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, name, type, holes, teamSize, courseId } = req.body;
+        const { year, group, name, type, holes } = req.body;
         if (!year || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, name, type (T or I), and holes (F, B, or A) are required' });
         }
-        if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
-            return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
-        }
-        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes, teamSize ?? null, courseId ?? null);
+        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes);
         res.json(session);
     }
     catch (error) {
@@ -220,14 +236,11 @@ app.post('/api/ryder/sessions', async (req, res) => {
 // Edit a session's name/type/holes (Admin -> Setup Sessions pencil icon)
 app.put('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, session, name, type, holes, teamSize, courseId } = req.body;
+        const { year, group, session, name, type, holes } = req.body;
         if (!year || !session || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, session, name, type (T or I), and holes (F, B, or A) are required' });
         }
-        if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
-            return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
-        }
-        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes, teamSize ?? null, courseId ?? null);
+        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes);
         res.json({ status: 'ok' });
     }
     catch (error) {
@@ -271,7 +284,11 @@ app.get('/api/ryder/sitting-out', async (req, res) => {
 app.get('/api/ryder/setup-roster', async (req, res) => {
     try {
         const groupId = parseInt(req.query.group || '1');
-        const roster = await (0, ryderService_1.getActiveRosterForSetup)(groupId);
+        const year = parseInt(req.query.year);
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const roster = await (0, ryderService_1.getActiveRosterForSetup)(year, groupId);
         res.json(roster);
     }
     catch (error) {
@@ -375,31 +392,20 @@ app.post('/api/ryder/finalize-match', async (req, res) => {
 // Add a new player to the roster (Admin -> Add Players)
 app.post('/api/ryder/players', async (req, res) => {
     try {
-        const { group, firstName, lastName, team } = req.body;
-        if (!firstName || !lastName || (team !== 'U' && team !== 'E' && team !== null)) {
-            return res.status(400).json({ error: 'firstName, lastName, and team (U, E, or null) are required' });
+        const { group, year, firstName, lastName, team, state, email, phone } = req.body;
+        if (!year || !firstName || !lastName || (team !== 'U' && team !== 'E')) {
+            return res.status(400).json({ error: 'year, firstName, lastName, and team (U or E) are required' });
         }
-        const result = await (0, ryderService_1.addPlayer)(group || 1, firstName.trim(), lastName.trim(), team);
-        if (!result.ok) {
-            return res.status(409).json({ error: result.error });
-        }
+        await (0, ryderService_1.addPlayer)(group || 1, year, firstName.trim(), lastName.trim(), team, {
+            state: state ? String(state).trim().toUpperCase() : null,
+            email: email ? String(email).trim() : null,
+            phone: phone ? String(phone).trim() : null,
+        });
         res.json({ status: 'ok' });
     }
     catch (error) {
         console.error('Error adding player:', error.message);
         res.status(500).json({ error: 'Failed to add player' });
-    }
-});
-// Every player on this group's roster, sorted by last name/first name (Admin -> Add Players list)
-app.get('/api/ryder/players', async (req, res) => {
-    try {
-        const groupId = parseInt(req.query.group || '1');
-        const players = await (0, ryderService_1.getPlayersForGroup)(groupId);
-        res.json(players);
-    }
-    catch (error) {
-        console.error('Error fetching players for group:', error.message);
-        res.status(500).json({ error: 'Failed to fetch players' });
     }
 });
 // Get the full player roster, split into "played last year" and everyone else (Admin -> Pick Players)
@@ -418,38 +424,39 @@ app.get('/api/ryder/player-roster', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch player roster' });
     }
 });
-// Rename a player (Admin -> Setup roster pencil button)
+// Update a player's name and contact details (Admin -> Setup roster pencil button)
 app.patch('/api/ryder/players/:id', async (req, res) => {
     try {
         const playerId = parseInt(req.params.id);
-        const { group, firstName, lastName } = req.body;
+        const { group, firstName, lastName, state, email, phone } = req.body;
         if (!firstName?.trim() || !lastName?.trim()) {
             return res.status(400).json({ error: 'firstName and lastName are required' });
         }
-        await (0, ryderService_1.renamePlayer)(group || 1, playerId, firstName.trim(), lastName.trim());
+        await (0, ryderService_1.updatePlayerDetails)(group || 1, playerId, firstName.trim(), lastName.trim(), {
+            state: state ? String(state).trim().toUpperCase() : null,
+            email: email ? String(email).trim() : null,
+            phone: phone ? String(phone).trim() : null,
+        });
         res.json({ status: 'ok' });
     }
     catch (error) {
-        console.error('Error renaming player:', error.message);
-        res.status(500).json({ error: 'Failed to rename player' });
+        console.error('Error updating player:', error.message);
+        res.status(500).json({ error: 'Failed to update player' });
     }
 });
-// Set a player's current team/active status (Admin -> Pick Players flag toggles)
+// Add or remove a player from a year's roster (Admin -> Setup flag toggles)
 app.post('/api/ryder/players/status', async (req, res) => {
     try {
-        const { group, playerId, active, team, year } = req.body;
-        if (!playerId || typeof active !== 'boolean' || (team !== 'U' && team !== 'E') || !year) {
-            return res.status(400).json({ error: 'playerId, active (boolean), team (U or E), and year are required' });
+        const { group, year, playerId, active, team } = req.body;
+        if (!year || !playerId || typeof active !== 'boolean' || (team !== 'U' && team !== 'E')) {
+            return res.status(400).json({ error: 'year, playerId, active (boolean), and team (U or E) are required' });
         }
-        const result = await (0, ryderService_1.updatePlayerStatus)(group || 1, playerId, active, team, year);
-        if (!result.ok) {
-            return res.status(409).json({ error: result.error });
-        }
+        await (0, ryderService_1.setRosterMembership)(group || 1, year, playerId, active, team);
         res.json({ status: 'ok' });
     }
     catch (error) {
-        console.error('Error updating player status:', error.message);
-        res.status(500).json({ error: 'Failed to update player status' });
+        console.error('Error updating roster membership:', error.message);
+        res.status(500).json({ error: 'Failed to update roster membership' });
     }
 });
 // Mark a player permanently retired (left club/deceased/kicked out) or restore them (Admin -> Setup)
@@ -467,20 +474,39 @@ app.post('/api/ryder/players/retired', async (req, res) => {
         res.status(500).json({ error: 'Failed to update player retired status' });
     }
 });
-// Save the roster for a year (Admin -> Setup "Save" button) — replaces whichever players/teams
-// were previously saved for that year with the given list
-app.post('/api/ryder/roster', async (req, res) => {
+// Maintenance: move an entire year's data to a different RyderYear within a group (see
+// renameEventYear's doc comment -- reusing a test event for successive real-year "replay" runs).
+// Not wired into the app UI -- deliberately admin/curl-only, since it's destructive and rare.
+app.post('/api/ryder/admin/rename-year', async (req, res) => {
     try {
-        const { group, year, players } = req.body;
-        if (!year || !Array.isArray(players)) {
-            return res.status(400).json({ error: 'year and players (array) are required' });
+        const { group, fromYear, toYear } = req.body;
+        if (!group || !fromYear || !toYear) {
+            return res.status(400).json({ error: 'group, fromYear, and toYear are required' });
         }
-        await (0, ryderService_1.saveYearRoster)(group || 1, year, players);
-        res.json({ status: 'ok' });
+        const result = await (0, ryderService_1.renameEventYear)(Number(group), Number(fromYear), Number(toYear));
+        if (!result.ok)
+            return res.status(400).json(result);
+        res.json(result);
     }
     catch (error) {
-        console.error('Error saving year roster:', error.message);
-        res.status(500).json({ error: 'Failed to save year roster' });
+        console.error('Error renaming event year:', error.message);
+        res.status(500).json({ error: 'Failed to rename event year' });
+    }
+});
+// Maintenance: permanently delete a year's data within a group (see clearEventYear's doc
+// comment). Not wired into the app UI -- deliberately admin/curl-only, since it's destructive.
+app.post('/api/ryder/admin/clear-year', async (req, res) => {
+    try {
+        const { group, year } = req.body;
+        if (!group || !year) {
+            return res.status(400).json({ error: 'group and year are required' });
+        }
+        await (0, ryderService_1.clearEventYear)(Number(group), Number(year));
+        res.json({ ok: true });
+    }
+    catch (error) {
+        console.error('Error clearing event year:', error.message);
+        res.status(500).json({ error: 'Failed to clear event year' });
     }
 });
 // Search Ryder Cup events by name or course (empty query returns everything)
@@ -629,50 +655,16 @@ app.get('/api/ryder/events/:groupId/course-history', async (req, res) => {
 // Create a brand-new course with its 18 hole rows
 app.post('/api/ryder/courses', async (req, res) => {
     try {
-        const { courseName, holes, ghinInfo } = req.body;
+        const { courseName, holes } = req.body;
         if (!courseName || !Array.isArray(holes)) {
             return res.status(400).json({ error: 'courseName and holes are required' });
         }
-        const courseId = await (0, ryderService_1.createCourse)(courseName, holes, ghinInfo);
+        const courseId = await (0, ryderService_1.createCourse)(courseName, holes);
         res.json({ courseId });
     }
     catch (error) {
         console.error('Error creating course:', error.message);
         res.status(500).json({ error: 'Failed to create course' });
-    }
-});
-// Search GHIN's own course database (CRDB) by name, for Add Course's "Search GHIN" flow
-app.get('/api/ryder/ghin/course-search', async (req, res) => {
-    try {
-        const name = (req.query.name || '').trim();
-        const state = (req.query.state || '').trim();
-        if (!name) {
-            return res.status(400).json({ error: 'name query param is required' });
-        }
-        const results = await (0, ghinService_1.searchGhinCourses)(name, state);
-        res.json(results);
-    }
-    catch (error) {
-        console.error('Error searching GHIN courses:', error.message);
-        res.status(500).json({ error: 'Failed to search GHIN courses' });
-    }
-});
-// Full tee-set/hole detail (par, yardage, stroke index, ratings) for one GHIN course
-app.get('/api/ryder/ghin/course-detail', async (req, res) => {
-    try {
-        const courseId = parseInt(req.query.courseId);
-        if (!courseId) {
-            return res.status(400).json({ error: 'courseId query param is required' });
-        }
-        const detail = await (0, ghinService_1.getGhinCourseDetail)(courseId);
-        if (!detail) {
-            return res.status(404).json({ error: 'Course not found' });
-        }
-        res.json(detail);
-    }
-    catch (error) {
-        console.error('Error fetching GHIN course detail:', error.message);
-        res.status(500).json({ error: 'Failed to fetch GHIN course detail' });
     }
 });
 // Scan a photo of a scorecard and extract course name + hole-by-hole par/handicap
