@@ -19,16 +19,22 @@ exports.getSessionsForYear = getSessionsForYear;
 exports.createSession = createSession;
 exports.updateSession = updateSession;
 exports.deleteSession = deleteSession;
+exports.deleteMatch = deleteMatch;
 exports.getRyderResults = getRyderResults;
 exports.getRyderClinchInfo = getRyderClinchInfo;
+exports.getRyderPointsTimeline = getRyderPointsTimeline;
 exports.getRyderCompletedMatches = getRyderCompletedMatches;
 exports.getRyderLeaderboard = getRyderLeaderboard;
 exports.getRyderScorecard = getRyderScorecard;
 exports.getSessionMatches = getSessionMatches;
 exports.getMatchSetup = getMatchSetup;
+exports.markMatchOpened = markMatchOpened;
+exports.clearMatchOpened = clearMatchOpened;
+exports.hasLiveActivity = hasLiveActivity;
 exports.saveHoleScore = saveHoleScore;
 exports.saveMatchResult = saveMatchResult;
 exports.addPlayer = addPlayer;
+exports.getPlayersForGroup = getPlayersForGroup;
 exports.getPlayerRoster = getPlayerRoster;
 exports.setRosterMembership = setRosterMembership;
 exports.updatePlayerDetails = updatePlayerDetails;
@@ -43,6 +49,8 @@ exports.getMatchPairing = getMatchPairing;
 exports.saveMatchPairing = saveMatchPairing;
 exports.getResultsHistory = getResultsHistory;
 exports.getPlayerRanking = getPlayerRanking;
+exports.getTeamsHistory = getTeamsHistory;
+exports.getSinglesHistory = getSinglesHistory;
 exports.renameEventYear = renameEventYear;
 exports.clearEventYear = clearEventYear;
 const config_1 = __importDefault(require("../db/config"));
@@ -159,13 +167,13 @@ async function getCourseList() {
  * hole rows. Not tied to any Ryder event or year on its own — picking it for a given year
  * happens separately via setEventCourse.
  */
-async function createCourse(courseName, holes) {
-    const [result] = await config_1.default.query('INSERT INTO Course (CourseName, LastUpdateUser) VALUES (?, ?)', [courseName, SCORER_NAME]);
+async function createCourse(courseName, holes, ghinInfo) {
+    const [result] = await config_1.default.query('INSERT INTO Course (CourseName, CourseCity, CourseState, GHINClubName, GHINCourseId, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?)', [courseName, ghinInfo?.city ?? null, ghinInfo?.state ?? null, ghinInfo?.ghinClubName ?? null, ghinInfo ? String(ghinInfo.ghinCourseId) : null, SCORER_NAME]);
     const courseId = result.insertId;
     if (holes.length > 0) {
-        const rowPlaceholders = holes.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
-        const params = holes.flatMap((h) => [courseId, h.holeNum, 1, h.par, h.hdcp, h.hdcp, SCORER_NAME]);
-        await config_1.default.query(`INSERT INTO CourseDetails (CourseID, HoleNum, TeeID, Par, Hdcp, OrigHdcp, LastUpdateUser) VALUES ${rowPlaceholders}`, params);
+        const rowPlaceholders = holes.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+        const params = holes.flatMap((h) => [courseId, h.holeNum, 1, h.yards ?? null, h.par, h.hdcp, h.hdcp, SCORER_NAME]);
+        await config_1.default.query(`INSERT INTO CourseDetails (CourseID, HoleNum, TeeID, Yards, Par, Hdcp, OrigHdcp, LastUpdateUser) VALUES ${rowPlaceholders}`, params);
     }
     return courseId;
 }
@@ -210,19 +218,23 @@ async function getEventCourseHistory(groupId) {
  * why). `matchCount` is how many distinct matches exist in that session so far.
  */
 async function getSessionsForYear(groupId, year) {
-    const [rows] = await config_1.default.query(`SELECT rs.SessionID, rs.Name, rs.Type, rs.Holes,
+    const [rows] = await config_1.default.query(`SELECT rs.SessionID, rs.Name, rs.Type, rs.TeamSize, rs.Holes, rs.CourseID, c.CourseName,
        (SELECT COUNT(DISTINCT rm.MatchID) FROM RyderMatch rm
         WHERE rm.RyderYear = rs.RyderYear AND rm.GroupID = rs.GroupID AND rm.SessionID = rs.SessionID) AS matchCount,
        (SELECT COUNT(DISTINCT rmr.MatchID) FROM RyderMatchResults rmr
         WHERE rmr.RyderYear = rs.RyderYear AND rmr.GroupID = rs.GroupID AND rmr.SessionID = rs.SessionID) AS completedCount
      FROM RyderSession rs
+     LEFT JOIN Course c ON c.CourseID = rs.CourseID
      WHERE rs.GroupID = ? AND rs.RyderYear = ?
      ORDER BY rs.SessionID`, [groupId, year]);
     return rows.map((r) => ({
         sessionId: r.SessionID,
         name: r.Name,
         type: r.Type,
+        teamSize: r.TeamSize,
         holes: r.Holes,
+        courseId: r.CourseID,
+        courseName: r.CourseName,
         matchCount: Number(r.matchCount),
         completedCount: Number(r.completedCount),
     }));
@@ -230,21 +242,30 @@ async function getSessionsForYear(groupId, year) {
 /**
  * Create a new session for a year/group — SessionID is allocated as MAX(SessionID)+1 for
  * that year/group (starting at 1), same allocation pattern already used for RyderEvents'
- * GroupID and RyderMatch's MatchID.
+ * GroupID and RyderMatch's MatchID. `teamSize` (players per side, 2-4) only means anything for
+ * a Team session — stored as null for Individual. `courseId` is null unless this session is
+ * played somewhere other than the event's default course for the year.
  */
-async function createSession(groupId, year, name, type, holes) {
+async function createSession(groupId, year, name, type, holes, teamSize, courseId) {
     const [rows] = await config_1.default.query('SELECT COALESCE(MAX(SessionID), 0) + 1 AS nextId FROM RyderSession WHERE GroupID = ? AND RyderYear = ?', [groupId, year]);
     const sessionId = rows[0].nextId;
-    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, Holes, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, holes, SCORER_NAME]);
-    return { sessionId, name, type, holes, matchCount: 0, completedCount: 0 };
+    const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
+    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, holes, courseId, SCORER_NAME]);
+    let courseName = null;
+    if (courseId !== null) {
+        const [courseRows] = await config_1.default.query('SELECT CourseName FROM Course WHERE CourseID = ?', [courseId]);
+        courseName = courseRows[0]?.CourseName ?? null;
+    }
+    return { sessionId, name, type, teamSize: resolvedTeamSize, holes, courseId, courseName, matchCount: 0, completedCount: 0 };
 }
 /**
- * Edit a session's name/type/holes in place — plans can change (e.g. going from team to
- * individual, or renaming) even after matches already exist in it. Existing matches keep
- * their players/course; only the session's own definition changes.
+ * Edit a session's name/type/holes/course in place — plans can change (e.g. going from team to
+ * individual, renaming, or switching courses) even after matches already exist in it. Existing
+ * matches keep their players/course; only the session's own definition changes.
  */
-async function updateSession(groupId, year, sessionId, name, type, holes) {
-    await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, Holes = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, holes, SCORER_NAME, groupId, year, sessionId]);
+async function updateSession(groupId, year, sessionId, name, type, holes, teamSize, courseId) {
+    const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
+    await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, TeamSize = ?, Holes = ?, CourseID = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, resolvedTeamSize, holes, courseId, SCORER_NAME, groupId, year, sessionId]);
 }
 /**
  * Delete a session and every match in it (plus that match's hole scores/results) — a session
@@ -260,6 +281,16 @@ async function deleteSession(groupId, year, sessionId) {
         await config_1.default.query('DELETE FROM RyderMatch WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?', [year, groupId, sessionId]);
     }
     await config_1.default.query('DELETE FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [groupId, year, sessionId]);
+}
+/**
+ * Delete a single match (Session Matches' "x" button) — same delete-cascade as deleteSession
+ * (RyderMatchScore -> RyderMatchResults -> RyderMatch) but scoped to one MatchID instead of a
+ * whole session, since a match set up wrong is a per-match mistake, not a whole-session one.
+ */
+async function deleteMatch(groupId, year, matchId) {
+    await config_1.default.query('DELETE FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    await config_1.default.query('DELETE FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    await config_1.default.query('DELETE FROM RyderMatch WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
 }
 /**
  * Get a year's Ryder Cup results — mirrors showresults.php, fixed to actually use the
@@ -387,7 +418,12 @@ async function getRyderClinchInfo(year, groupId) {
      LEFT JOIN RyderSession rs ON rs.GroupID = r.GroupID AND rs.RyderYear = r.RyderYear AND rs.SessionID = r.SessionID
      WHERE r.RyderYear = ? AND r.GroupID = ?
      ORDER BY r.LastUpdateDt ASC, r.MatchID ASC`, [year, groupId]);
-    const rosters = await getMatchRosters(year, groupId);
+    // Deliberately fetched only once a clinch is actually found (inside the loop below), not
+    // up front -- this used to run unconditionally on every call, which meant a real join across
+    // every match/player for the year on every 30s poll from every open screen, even in session 1
+    // when the math makes clinching impossible. Confirmed 2026-07-26: real, avoidable DB load for
+    // the entire early part of an event, for data that's thrown away every time except the one
+    // poll that actually finds the clinch.
     let usaPoints = 0;
     let euroPoints = 0;
     for (const r of resultRows) {
@@ -398,6 +434,7 @@ async function getRyderClinchInfo(year, groupId) {
             euroPoints += points;
         if (usaPoints >= usaThreshold || euroPoints >= euroThreshold) {
             const winningTeam = usaPoints >= usaThreshold ? 'U' : 'E';
+            const rosters = await getMatchRosters(year, groupId);
             const roster = rosters.get(r.MatchID) ?? { usaPlayers: '', euroPlayers: '' };
             return {
                 winningTeam,
@@ -416,6 +453,34 @@ async function getRyderClinchInfo(year, groupId) {
         }
     }
     return null;
+}
+/**
+ * The running point totals over time, one entry per completed match in the order results were
+ * actually recorded (LastUpdateDt) -- for the collapsible points-progression chart on Standings.
+ * Same replay pattern as getRyderClinchInfo, but keeps every step instead of stopping at the
+ * clinch. Thresholds are included so the chart can draw the winning line at the correct height
+ * without a second request. Null when this year has no matches set up at all yet.
+ */
+async function getRyderPointsTimeline(year, groupId) {
+    const thresholds = await getClinchThresholds(year, groupId);
+    if (!thresholds)
+        return null;
+    const [resultRows] = await config_1.default.query(`SELECT MatchID, Winner, Points, LastUpdateDt
+     FROM RyderMatchResults
+     WHERE RyderYear = ? AND GroupID = ?
+     ORDER BY LastUpdateDt ASC, MatchID ASC`, [year, groupId]);
+    let usaPoints = 0;
+    let euroPoints = 0;
+    const points = [];
+    for (const r of resultRows) {
+        const pts = Number(r.Points);
+        if (r.Winner === 'B' || r.Winner === 'U')
+            usaPoints += pts;
+        if (r.Winner === 'B' || r.Winner === 'E')
+            euroPoints += pts;
+        points.push({ matchId: r.MatchID, timestamp: r.LastUpdateDt, usaPoints, euroPoints });
+    }
+    return { points, usaThreshold: thresholds.usaThreshold, euroThreshold: thresholds.euroThreshold };
 }
 /**
  * Every completed match for the year, in the order they were actually recorded (LastUpdateDt) --
@@ -666,18 +731,23 @@ async function getSessionMatches(year, groupId, sessionId) {
     const matchIds = matchIdRows.map((r) => r.MatchID);
     if (matchIds.length === 0)
         return [];
-    const [rosters, displayNumbers, startedRows, completedRows] = await Promise.all([
+    const [rosters, displayNumbers, startedRows, openedRows, completedRows] = await Promise.all([
         getMatchRosters(year, groupId, true, sessionId),
         getMatchDisplayNumbers(year, groupId),
         config_1.default.query(`SELECT DISTINCT MatchID FROM RyderMatchScore
        WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)`, [year, groupId, matchIds]).then(([rows]) => rows),
+        config_1.default.query(`SELECT MatchID FROM RyderMatchOpen WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)`, [year, groupId, matchIds]).then(([rows]) => rows),
         config_1.default.query('SELECT MatchID FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?', [
             year,
             groupId,
             sessionId,
         ]).then(([rows]) => rows),
     ]);
-    const startedIds = new Set(startedRows.map((r) => r.MatchID));
+    // "Started" is either a real recorded hole (RyderMatchScore) or someone currently has the
+    // scorer screen open on this match with nothing recorded yet (RyderMatchOpen) -- without the
+    // latter, two people could both tap into the same not-yet-scored match at once (confirmed as
+    // a real risk with Matt 2026-07-27), since the old signal only appeared after hole 1 was saved.
+    const startedIds = new Set([...startedRows, ...openedRows].map((r) => r.MatchID));
     const completedIds = new Set(completedRows.map((r) => r.MatchID));
     return matchIds.map((matchId) => ({
         matchId,
@@ -728,6 +798,42 @@ async function getMatchSetup(year, groupId, matchId) {
     return { matchId, displayNumber: displayNumbers.get(matchId) ?? matchId, sessionId, usaPlayers, euroPlayers, holes };
 }
 /**
+ * Mark a match as "someone has the scorer screen open right now" (Start Match tapped, before
+ * any hole is recorded) -- see RyderSessionMatch.inProgress's doc comment for why this exists
+ * separately from RyderMatchScore. Called on rydermatch.tsx mount.
+ */
+async function markMatchOpened(groupId, year, matchId) {
+    await config_1.default.query(`INSERT INTO RyderMatchOpen (GroupID, RyderYear, MatchID, LastUpdateUser) VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE LastUpdateUser = ?`, [groupId, year, matchId, SCORER_NAME, SCORER_NAME]);
+}
+/**
+ * Reverse markMatchOpened -- called when the scorer screen unmounts with nothing recorded yet
+ * (left via Home, back navigation, etc.), so the match goes back to showing as not-started for
+ * the next person. Safe to call even if real hole scores exist by now (a separate signal), or if
+ * no RyderMatchOpen row exists at all (nothing to delete).
+ */
+async function clearMatchOpened(groupId, year, matchId) {
+    await config_1.default.query('DELETE FROM RyderMatchOpen WHERE GroupID = ? AND RyderYear = ? AND MatchID = ?', [groupId, year, matchId]);
+}
+/**
+ * Whether anything is actually live for this year right now -- someone has a match's scorer
+ * screen open (RyderMatchOpen), or a match has recorded holes but hasn't been finalized yet.
+ * This event runs once a year, so Leaderboard/Standings default to showing last year's (or
+ * whatever year's) already-decided results the other 364 days -- there's no reason for those
+ * screens to auto-poll every 30s when nothing is actually happening. They call this once and
+ * only start polling if it comes back true (see RyderSessionMatch.inProgress's doc comment for
+ * the related per-match version of this same idea).
+ */
+async function hasLiveActivity(groupId, year) {
+    const [rows] = await config_1.default.query(`SELECT 1 FROM RyderMatchOpen WHERE GroupID = ? AND RyderYear = ?
+     UNION
+     SELECT 1 FROM RyderMatchScore s
+     LEFT JOIN RyderMatchResults r ON r.GroupID = s.GroupID AND r.RyderYear = s.RyderYear AND r.MatchID = s.MatchID
+     WHERE s.GroupID = ? AND s.RyderYear = ? AND r.MatchID IS NULL
+     LIMIT 1`, [groupId, year, groupId, year]);
+    return rows.length > 0;
+}
+/**
  * Record a single hole's result — mirrors savescore.php, parameterized (the original
  * concatenated the raw query-string values straight into SQL).
  */
@@ -747,15 +853,17 @@ async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, ho
     let winner;
     let points;
     let resultText;
+    // A match decided on the very last hole (0 remaining) reads as "N up" in golf, not "N & 0" --
+    // "& 0" only makes sense when holes were left unplayed.
     if (matchScore > 0) {
         winner = 'U';
         points = 1;
-        resultText = `${matchScore} & ${holesRemaining}`;
+        resultText = holesRemaining === 0 ? `${matchScore} up` : `${matchScore} & ${holesRemaining}`;
     }
     else if (matchScore < 0) {
         winner = 'E';
         points = 1;
-        resultText = `${Math.abs(matchScore)} & ${holesRemaining}`;
+        resultText = holesRemaining === 0 ? `${Math.abs(matchScore)} up` : `${Math.abs(matchScore)} & ${holesRemaining}`;
     }
     else {
         winner = 'B';
@@ -774,8 +882,14 @@ async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, ho
  * hand when quickly adding someone.
  */
 async function addPlayer(groupId, year, firstName, lastName, team, contact) {
+    const trimmedFirst = firstName.trim();
+    const trimmedLast = lastName.trim();
+    const [existing] = await config_1.default.query('SELECT PlayerID FROM RyderPlayer WHERE GroupID = ? AND LOWER(FirstName) = LOWER(?) AND LOWER(LastName) = LOWER(?)', [groupId, trimmedFirst, trimmedLast]);
+    if (existing.length > 0) {
+        return { ok: false, error: 'Player already exists, please modify existing player.' };
+    }
     const [result] = await config_1.default.query(`INSERT INTO RyderPlayer (GroupID, FirstName, LastName, Team, State, Email, Phone, Active, LastUpdateUser)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'Y', ?)`, [groupId, firstName, lastName, team, contact.state, contact.email, contact.phone, SCORER_NAME]);
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'Y', ?)`, [groupId, trimmedFirst, trimmedLast, team, contact.state, contact.email, contact.phone, SCORER_NAME]);
     const playerId = result.insertId;
     await config_1.default.query(`INSERT INTO RyderRoster (GroupID, RyderYear, PlayerID, Team, LastUpdateUser) VALUES (?, ?, ?, ?, ?)`, [
         groupId,
@@ -784,6 +898,21 @@ async function addPlayer(groupId, year, firstName, lastName, team, contact) {
         team,
         SCORER_NAME,
     ]);
+    return { ok: true };
+}
+/**
+ * Every player ever added to this group, sorted by last name then first name — for Add
+ * Players' "already on this event" list. Deliberately lighter than getPlayerRoster (no
+ * year-scoped played-last-year split, no per-player GHIN handicap lookups): this is just a
+ * name/team reference list, not the Pick Players workflow.
+ */
+async function getPlayersForGroup(groupId, year) {
+    const [rows] = await config_1.default.query(`SELECT p.PlayerID, p.FirstName, p.LastName, ro.Team
+     FROM RyderPlayer p
+     JOIN RyderRoster ro ON ro.PlayerID = p.PlayerID AND ro.GroupID = p.GroupID AND ro.RyderYear = ?
+     WHERE p.GroupID = ?
+     ORDER BY p.LastName, p.FirstName`, [year, groupId]);
+    return rows.map((r) => ({ playerId: r.PlayerID, firstName: r.FirstName, lastName: r.LastName, team: r.Team }));
 }
 /**
  * The first time a year's roster is loaded (RyderRoster has nothing for it yet), carry forward
@@ -1100,6 +1229,148 @@ async function getPlayerRanking(groupId) {
         return { playerId, ...p, winPct };
     })
         .sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
+}
+/**
+ * Every all-time partnership record for the group — two players who were ever on the same Team
+ * in the same match (foursomes/four-ball, 2 players a side), across every year on record. Singles
+ * matches (1 player a side) have no partnership and are skipped entirely, same as a not-yet-played
+ * match. Reuses getPlayerRanking's win/loss/tie logic and the same (year, matchId) keying (MatchID
+ * resets to 1 each year), just aggregated per unique player PAIR instead of per player. A pair's
+ * key is its two PlayerIDs sorted ascending, so "A partnered B" and "B partnered A" are always the
+ * same row regardless of which side of RyderMatch each name came from.
+ */
+async function getTeamsHistory(groupId) {
+    const [resultRows] = await config_1.default.query('SELECT RyderYear, MatchID, Winner, Points FROM RyderMatchResults WHERE GroupID = ?', [groupId]);
+    const resultByMatch = new Map();
+    for (const r of resultRows) {
+        resultByMatch.set(`${r.RyderYear}-${r.MatchID}`, { winner: r.Winner, points: Number(r.Points) });
+    }
+    const [matchRows] = await config_1.default.query(`SELECT rm.RyderYear, rm.MatchID, rm.Team, rm.PlayerID, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
+     FROM RyderMatch rm
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     WHERE rm.GroupID = ?
+     ORDER BY rm.RyderYear, rm.MatchID, rm.Team`, [groupId]);
+    const teamGroups = new Map();
+    for (const m of matchRows) {
+        const key = `${m.RyderYear}-${m.MatchID}-${m.Team}`;
+        if (!teamGroups.has(key))
+            teamGroups.set(key, { year: m.RyderYear, matchId: m.MatchID, team: m.Team, players: [] });
+        teamGroups.get(key).players.push({ id: m.PlayerID, name: m.name });
+    }
+    const pairs = new Map();
+    for (const g of teamGroups.values()) {
+        if (g.players.length !== 2)
+            continue; // singles match -- no partnership
+        const result = resultByMatch.get(`${g.year}-${g.matchId}`);
+        if (!result)
+            continue;
+        const [p1, p2] = g.players.slice().sort((a, b) => a.id - b.id);
+        const key = `${p1.id}-${p2.id}`;
+        if (!pairs.has(key)) {
+            pairs.set(key, {
+                player1Id: p1.id, player1Name: p1.name, player2Id: p2.id, player2Name: p2.name,
+                points: 0, wins: 0, losses: 0, ties: 0, winPct: 0, timesPlayed: 0,
+            });
+        }
+        const row = pairs.get(key);
+        row.timesPlayed += 1;
+        if (result.winner === 'B') {
+            row.points += result.points;
+            row.ties += 1;
+        }
+        else if (result.winner === g.team) {
+            row.points += result.points;
+            row.wins += 1;
+        }
+        else {
+            row.losses += 1;
+        }
+    }
+    return Array.from(pairs.values())
+        .map((r) => {
+        const decided = r.wins + r.losses + r.ties;
+        return { ...r, winPct: decided > 0 ? ((r.wins + 0.5 * r.ties) / decided) * 100 : 0 };
+    })
+        .sort((a, b) => b.points - a.points || a.player1Name.localeCompare(b.player1Name));
+}
+/**
+ * Every all-time singles (1-a-side) head-to-head record for the group -- mirrors
+ * getTeamsHistory's replay/aggregation approach exactly, but pairs the lone USA player against
+ * the lone Europe player in the same match instead of two players on the same team. Only counts
+ * a match if both sides actually had exactly one player recorded (a genuine singles match) and a
+ * result exists; anything else (foursomes/four-ball, or a singles match with no result yet) is
+ * skipped, same as a not-yet-played match elsewhere in this file.
+ */
+async function getSinglesHistory(groupId) {
+    const [resultRows] = await config_1.default.query('SELECT RyderYear, MatchID, Winner, Points FROM RyderMatchResults WHERE GroupID = ?', [groupId]);
+    const resultByMatch = new Map();
+    for (const r of resultRows) {
+        resultByMatch.set(`${r.RyderYear}-${r.MatchID}`, { winner: r.Winner, points: Number(r.Points) });
+    }
+    const [matchRows] = await config_1.default.query(`SELECT rm.RyderYear, rm.MatchID, rm.Team, rm.PlayerID, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
+     FROM RyderMatch rm
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     WHERE rm.GroupID = ?
+     ORDER BY rm.RyderYear, rm.MatchID, rm.Team`, [groupId]);
+    const teamGroups = new Map();
+    for (const m of matchRows) {
+        const key = `${m.RyderYear}-${m.MatchID}-${m.Team}`;
+        if (!teamGroups.has(key))
+            teamGroups.set(key, { year: m.RyderYear, matchId: m.MatchID, team: m.Team, players: [] });
+        teamGroups.get(key).players.push({ id: m.PlayerID, name: m.name });
+    }
+    // Re-group by (year, matchId) to pair up each match's USA-side and Europe-side singles groups.
+    const matchSides = new Map();
+    for (const g of teamGroups.values()) {
+        if (g.players.length !== 1)
+            continue; // not a singles match
+        const key = `${g.year}-${g.matchId}`;
+        if (!matchSides.has(key))
+            matchSides.set(key, {});
+        const sides = matchSides.get(key);
+        if (g.team === 'U')
+            sides.usa = g.players[0];
+        else if (g.team === 'E')
+            sides.euro = g.players[0];
+    }
+    const pairs = new Map();
+    for (const [key, sides] of matchSides) {
+        if (!sides.usa || !sides.euro)
+            continue;
+        const result = resultByMatch.get(key);
+        if (!result)
+            continue;
+        const usaIsP1 = sides.usa.id < sides.euro.id;
+        const p1 = usaIsP1 ? sides.usa : sides.euro;
+        const p2 = usaIsP1 ? sides.euro : sides.usa;
+        const p1Team = usaIsP1 ? 'U' : 'E';
+        const pairKey = `${p1.id}-${p2.id}`;
+        if (!pairs.has(pairKey)) {
+            pairs.set(pairKey, {
+                player1Id: p1.id, player1Name: p1.name, player2Id: p2.id, player2Name: p2.name,
+                player1Wins: 0, player1Losses: 0, ties: 0, player1Points: 0, winPct: 0, timesPlayed: 0,
+            });
+        }
+        const row = pairs.get(pairKey);
+        row.timesPlayed += 1;
+        if (result.winner === 'B') {
+            row.player1Points += result.points;
+            row.ties += 1;
+        }
+        else if (result.winner === p1Team) {
+            row.player1Points += result.points;
+            row.player1Wins += 1;
+        }
+        else {
+            row.player1Losses += 1;
+        }
+    }
+    return Array.from(pairs.values())
+        .map((r) => {
+        const decided = r.player1Wins + r.player1Losses + r.ties;
+        return { ...r, winPct: decided > 0 ? ((r.player1Wins + 0.5 * r.ties) / decided) * 100 : 0 };
+    })
+        .sort((a, b) => b.player1Points - a.player1Points || a.player1Name.localeCompare(b.player1Name));
 }
 /** Every table keyed by (GroupID, RyderYear) -- RyderPlayer and RyderEvents aren't year-scoped
  * (a player/event persists across years), and RyderHdcp is keyed by real calendar Year, not

@@ -12,11 +12,13 @@ exports.searchGhinWithHistoryFallback = searchGhinWithHistoryFallback;
 exports.findEasyGhinLinks = findEasyGhinLinks;
 exports.refreshGhinHandicaps = refreshGhinHandicaps;
 exports.getLastGhinRefresh = getLastGhinRefresh;
+exports.searchGhinCourses = searchGhinCourses;
+exports.getGhinCourseDetail = getGhinCourseDetail;
 const config_1 = __importDefault(require("../db/config"));
 const ryderService_1 = require("./ryderService");
 /** Every player on this group's roster, eligible for GHIN linking. */
 async function getGhinPlayerList(groupId) {
-    const [rows] = await config_1.default.query(`SELECT PlayerID, CONCAT(LastName, ',', FirstName) AS name, GHIN, SkipGhin
+    const [rows] = await config_1.default.query(`SELECT PlayerID, CONCAT(LastName, ',', FirstName) AS name, GHIN, SkipGhin, State
      FROM RyderPlayer
      WHERE GroupID = ?
      ORDER BY LastName, FirstName`, [groupId]);
@@ -25,6 +27,7 @@ async function getGhinPlayerList(groupId) {
         name: r.name,
         ghin: r.GHIN,
         skipped: r.SkipGhin === 'Y',
+        state: r.State,
     }));
 }
 /** Skip (or un-skip) a player from the GHIN-linking flow. */
@@ -427,4 +430,72 @@ async function refreshGhinHandicaps(year, force = false) {
 async function getLastGhinRefresh() {
     const [rows] = await config_1.default.query(`SELECT MAX(LastUpdateDt) AS lastRefreshedAt FROM RyderHdcp WHERE LastUpdateUser = ?`, [ryderService_1.GHIN_SYNC_USER]);
     return rows[0]?.lastRefreshedAt ?? null;
+}
+/**
+ * Search GHIN's course database (the USGA Course Rating and Slope Database, aka CRDB) by name —
+ * the same source GHIN itself pulls from when a golfer posts an official score, so building a
+ * course from this instead of a scanned photo keeps the numbers consistent with GHIN's own,
+ * which matters if this app ever posts scores back. A blank/falsy `state` searches nationwide.
+ */
+async function searchGhinCourses(name, state) {
+    const token = await getGhinBearerToken();
+    // GHIN's search silently returns zero results unless state is prefixed "US-" (e.g. "US-NC") —
+    // a bare "NC" is accepted with a 200 but matches nothing.
+    const locationParam = state ? `state=${encodeURIComponent(`US-${state.toUpperCase()}`)}` : 'country=USA';
+    const url = `https://ghin-apiproxy.usga.org/api/v1/courses/search.json?name=${encodeURIComponent(name)}&per_page=25&${locationParam}`;
+    const response = await fetch(url, {
+        headers: { 'Content-Type': 'application/json; charset=utf-8', Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok)
+        return [];
+    const data = (await response.json());
+    const courses = data.courses ?? [];
+    return courses.map((c) => ({
+        courseId: c.CourseID,
+        courseName: c.CourseName,
+        facilityName: c.FacilityName,
+        city: c.City ?? null,
+        state: (c.State || '').replace(/^US-/, '') || null,
+    }));
+}
+/**
+ * Full course detail from GHIN's CRDB — every tee set on file, each with its 18 holes' par,
+ * stroke index (GHIN's "Allocation", this app's "Hdcp"), and yardage, plus that tee's own
+ * Course/Slope rating. Only tee sets with a complete 18 holes are included — a handful of CRDB
+ * entries are legacy/incomplete and would otherwise show up as unusable blank rows.
+ */
+async function getGhinCourseDetail(courseId) {
+    const token = await getGhinBearerToken();
+    const url = `https://ghin-apiproxy.usga.org/api/v1/courses/${courseId}.json`;
+    const response = await fetch(url, {
+        headers: { 'Content-Type': 'application/json; charset=utf-8', Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok)
+        return null;
+    const data = (await response.json());
+    const teeSets = (data.TeeSets ?? [])
+        .filter((t) => Array.isArray(t.Holes) && t.Holes.length === 18)
+        .map((t) => {
+        const totalRating = (t.Ratings ?? []).find((r) => r.RatingType === 'Total');
+        return {
+            teeSetId: t.TeeSetRatingId,
+            teeName: t.TeeSetRatingName,
+            gender: t.Gender,
+            courseRating: totalRating?.CourseRating ?? null,
+            slopeRating: totalRating?.SlopeRating ?? null,
+            totalPar: t.TotalPar,
+            totalYardage: t.TotalYardage,
+            holes: [...t.Holes]
+                .sort((a, b) => a.Number - b.Number)
+                .map((h) => ({ holeNum: h.Number, par: h.Par, hdcp: h.Allocation, yards: h.Length })),
+        };
+    });
+    return {
+        courseId: data.CourseId,
+        courseName: data.CourseName,
+        facilityName: data.Facility?.FacilityName ?? data.CourseName,
+        city: data.CourseCity ?? null,
+        state: (data.CourseState || '').replace(/^US-/, '') || null,
+        teeSets,
+    };
 }

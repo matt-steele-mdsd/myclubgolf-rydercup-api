@@ -13,7 +13,6 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const config_1 = __importDefault(require("./src/db/config"));
 const ryderService_1 = require("./src/services/ryderService");
-const scorecardScanService_1 = require("./src/services/scorecardScanService");
 const ghinService_1 = require("./src/services/ghinService");
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
@@ -126,6 +125,24 @@ app.get('/api/ryder/clinch', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch Ryder clinch info' });
     }
 });
+// Running point totals over time (one entry per completed match, in recording order) plus the
+// winning-line thresholds -- see getRyderPointsTimeline. Feeds the collapsible points-progression
+// chart on Standings. Null when this year has no matches set up yet.
+app.get('/api/ryder/points-timeline', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const timeline = await (0, ryderService_1.getRyderPointsTimeline)(year, groupId);
+        res.json(timeline);
+    }
+    catch (error) {
+        console.error('Error fetching Ryder points timeline:', error.message);
+        res.status(500).json({ error: 'Failed to fetch Ryder points timeline' });
+    }
+});
 // Every completed match for the year, in recording order -- see getRyderCompletedMatches. Used
 // client-side to detect matches finishing while someone's watching one of the live screens, for
 // the per-match "Congratulations"/"Match Tied" celebration.
@@ -221,11 +238,14 @@ app.get('/api/ryder/sessions', async (req, res) => {
 // Create a new session for a year/group (Admin -> Setup Sessions "+ Add Session")
 app.post('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, name, type, holes } = req.body;
+        const { year, group, name, type, holes, teamSize, courseId } = req.body;
         if (!year || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, name, type (T or I), and holes (F, B, or A) are required' });
         }
-        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes);
+        if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
+            return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
+        }
+        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes, teamSize ?? null, courseId ?? null);
         res.json(session);
     }
     catch (error) {
@@ -236,11 +256,14 @@ app.post('/api/ryder/sessions', async (req, res) => {
 // Edit a session's name/type/holes (Admin -> Setup Sessions pencil icon)
 app.put('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, session, name, type, holes } = req.body;
+        const { year, group, session, name, type, holes, teamSize, courseId } = req.body;
         if (!year || !session || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, session, name, type (T or I), and holes (F, B, or A) are required' });
         }
-        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes);
+        if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
+            return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
+        }
+        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes, teamSize ?? null, courseId ?? null);
         res.json({ status: 'ok' });
     }
     catch (error) {
@@ -261,6 +284,21 @@ app.delete('/api/ryder/sessions', async (req, res) => {
     catch (error) {
         console.error('Error deleting session:', error.message);
         res.status(500).json({ error: 'Failed to delete session' });
+    }
+});
+// Delete a single match (Session Matches "x" button)
+app.delete('/api/ryder/matches', async (req, res) => {
+    try {
+        const { year, group, match } = req.body;
+        if (!year || !match) {
+            return res.status(400).json({ error: 'year and match are required' });
+        }
+        await (0, ryderService_1.deleteMatch)(group || 1, year, match);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error deleting match:', error.message);
+        res.status(500).json({ error: 'Failed to delete match' });
     }
 });
 // Get the active roster players not yet in any match for a session (Session Matches' "Sitting out")
@@ -374,6 +412,54 @@ app.post('/api/ryder/score-hole', async (req, res) => {
         res.status(500).json({ error: 'Failed to save hole score' });
     }
 });
+// Whether anything is actually live this year -- used to decide whether Leaderboard/Standings
+// should even start their 30s auto-refresh, rather than polling year-round for an event that
+// only runs one day a year
+app.get('/api/ryder/live-activity', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const live = await (0, ryderService_1.hasLiveActivity)(groupId, year);
+        res.json({ live });
+    }
+    catch (error) {
+        console.error('Error checking live activity:', error.message);
+        res.status(500).json({ error: 'Failed to check live activity' });
+    }
+});
+// Mark a match's scorer screen as opened (Start Match tapped, nothing recorded yet)
+app.post('/api/ryder/matches/opened', async (req, res) => {
+    try {
+        const { year, group, match } = req.body;
+        if (!year || !match) {
+            return res.status(400).json({ error: 'year and match are required' });
+        }
+        await (0, ryderService_1.markMatchOpened)(group || 1, year, match);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error marking match opened:', error.message);
+        res.status(500).json({ error: 'Failed to mark match opened' });
+    }
+});
+// Clear a match's "opened" marker (left the scorer screen without recording anything)
+app.delete('/api/ryder/matches/opened', async (req, res) => {
+    try {
+        const { year, group, match } = req.body;
+        if (!year || !match) {
+            return res.status(400).json({ error: 'year and match are required' });
+        }
+        await (0, ryderService_1.clearMatchOpened)(group || 1, year, match);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error clearing match opened:', error.message);
+        res.status(500).json({ error: 'Failed to clear match opened' });
+    }
+});
 // Record a match's final result
 app.post('/api/ryder/finalize-match', async (req, res) => {
     try {
@@ -396,16 +482,35 @@ app.post('/api/ryder/players', async (req, res) => {
         if (!year || !firstName || !lastName || (team !== 'U' && team !== 'E')) {
             return res.status(400).json({ error: 'year, firstName, lastName, and team (U or E) are required' });
         }
-        await (0, ryderService_1.addPlayer)(group || 1, year, firstName.trim(), lastName.trim(), team, {
+        const result = await (0, ryderService_1.addPlayer)(group || 1, year, firstName.trim(), lastName.trim(), team, {
             state: state ? String(state).trim().toUpperCase() : null,
             email: email ? String(email).trim() : null,
             phone: phone ? String(phone).trim() : null,
         });
+        if (!result.ok) {
+            return res.status(409).json({ error: result.error });
+        }
         res.json({ status: 'ok' });
     }
     catch (error) {
         console.error('Error adding player:', error.message);
         res.status(500).json({ error: 'Failed to add player' });
+    }
+});
+// Every player on this group's roster, sorted by last name/first name (Admin -> Add Players list)
+app.get('/api/ryder/players', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const year = parseInt(req.query.year);
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const players = await (0, ryderService_1.getPlayersForGroup)(groupId, year);
+        res.json(players);
+    }
+    catch (error) {
+        console.error('Error fetching players for group:', error.message);
+        res.status(500).json({ error: 'Failed to fetch players' });
     }
 });
 // Get the full player roster, split into "played last year" and everyone else (Admin -> Pick Players)
@@ -597,6 +702,30 @@ app.get('/api/ryder/player-ranking', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch player ranking' });
     }
 });
+// Get every all-time partnership record (Menu -> History -> Teams History)
+app.get('/api/ryder/teams-history', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const history = await (0, ryderService_1.getTeamsHistory)(groupId);
+        res.json(history);
+    }
+    catch (error) {
+        console.error('Error fetching teams history:', error.message);
+        res.status(500).json({ error: 'Failed to fetch teams history' });
+    }
+});
+// Get every all-time singles head-to-head record (Menu -> History -> Singles History)
+app.get('/api/ryder/singles-history', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const history = await (0, ryderService_1.getSinglesHistory)(groupId);
+        res.json(history);
+    }
+    catch (error) {
+        console.error('Error fetching singles history:', error.message);
+        res.status(500).json({ error: 'Failed to fetch singles history' });
+    }
+});
 // Get every course on record, for the Create Event course picker
 app.get('/api/ryder/courses', async (_req, res) => {
     try {
@@ -655,11 +784,11 @@ app.get('/api/ryder/events/:groupId/course-history', async (req, res) => {
 // Create a brand-new course with its 18 hole rows
 app.post('/api/ryder/courses', async (req, res) => {
     try {
-        const { courseName, holes } = req.body;
+        const { courseName, holes, ghinInfo } = req.body;
         if (!courseName || !Array.isArray(holes)) {
             return res.status(400).json({ error: 'courseName and holes are required' });
         }
-        const courseId = await (0, ryderService_1.createCourse)(courseName, holes);
+        const courseId = await (0, ryderService_1.createCourse)(courseName, holes, ghinInfo);
         res.json({ courseId });
     }
     catch (error) {
@@ -667,19 +796,38 @@ app.post('/api/ryder/courses', async (req, res) => {
         res.status(500).json({ error: 'Failed to create course' });
     }
 });
-// Scan a photo of a scorecard and extract course name + hole-by-hole par/handicap
-app.post('/api/ryder/courses/scan', async (req, res) => {
+// Search GHIN's own course database (CRDB) by name, for Add Course's "Search GHIN" flow
+app.get('/api/ryder/ghin/course-search', async (req, res) => {
     try {
-        const { imageBase64, mediaType } = req.body;
-        if (!imageBase64 || !mediaType) {
-            return res.status(400).json({ error: 'imageBase64 and mediaType are required' });
+        const name = (req.query.name || '').trim();
+        const state = (req.query.state || '').trim();
+        if (!name) {
+            return res.status(400).json({ error: 'name query param is required' });
         }
-        const scanned = await (0, scorecardScanService_1.scanScorecardImage)(imageBase64, mediaType);
-        res.json(scanned);
+        const results = await (0, ghinService_1.searchGhinCourses)(name, state);
+        res.json(results);
     }
     catch (error) {
-        console.error('Error scanning scorecard:', error.message);
-        res.status(500).json({ error: 'Failed to scan scorecard' });
+        console.error('Error searching GHIN courses:', error.message);
+        res.status(500).json({ error: 'Failed to search GHIN courses' });
+    }
+});
+// Full tee-set/hole detail (par, yardage, stroke index, ratings) for one GHIN course
+app.get('/api/ryder/ghin/course-detail', async (req, res) => {
+    try {
+        const courseId = parseInt(req.query.courseId);
+        if (!courseId) {
+            return res.status(400).json({ error: 'courseId query param is required' });
+        }
+        const detail = await (0, ghinService_1.getGhinCourseDetail)(courseId);
+        if (!detail) {
+            return res.status(404).json({ error: 'Course not found' });
+        }
+        res.json(detail);
+    }
+    catch (error) {
+        console.error('Error fetching GHIN course detail:', error.message);
+        res.status(500).json({ error: 'Failed to fetch GHIN course detail' });
     }
 });
 // Get the GHIN-linking player list for a group
