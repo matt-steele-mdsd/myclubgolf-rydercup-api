@@ -364,6 +364,50 @@ app.post('/api/ryder/hdcp', async (req, res) => {
         res.status(500).json({ error: 'Failed to save handicap' });
     }
 });
+// Whether this group's handicaps are frozen for a year (Captain -> Handicaps submenu)
+app.get('/api/ryder/hdcp-freeze', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const year = parseInt(req.query.year);
+        if (!year)
+            return res.status(400).json({ error: 'year query param is required' });
+        const status = await (0, ryderService_1.getHandicapFreezeStatus)(groupId, year);
+        res.json(status);
+    }
+    catch (error) {
+        console.error('Error fetching handicap freeze status:', error.message);
+        res.status(500).json({ error: 'Failed to fetch handicap freeze status' });
+    }
+});
+// Freeze this group's handicaps for a year -- GHIN sync will skip these players from now on
+app.post('/api/ryder/hdcp-freeze', async (req, res) => {
+    try {
+        const { groupId, year, user } = req.body;
+        if (!groupId || !year)
+            return res.status(400).json({ error: 'groupId and year are required' });
+        await (0, ryderService_1.freezeHandicaps)(groupId, year, user || 'app');
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error freezing handicaps:', error.message);
+        res.status(500).json({ error: 'Failed to freeze handicaps' });
+    }
+});
+// Unfreeze this group's handicaps for a year -- GHIN sync resumes normally
+app.delete('/api/ryder/hdcp-freeze', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const year = parseInt(req.query.year);
+        if (!year)
+            return res.status(400).json({ error: 'year query param is required' });
+        await (0, ryderService_1.unfreezeHandicaps)(groupId, year);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error unfreezing handicaps:', error.message);
+        res.status(500).json({ error: 'Failed to unfreeze handicaps' });
+    }
+});
 // Get a match's current course/player pairing (Admin -> Setup Matches editor)
 app.get('/api/ryder/match-pairing', async (req, res) => {
     try {

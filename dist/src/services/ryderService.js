@@ -45,6 +45,9 @@ exports.getActiveRosterForSetup = getActiveRosterForSetup;
 exports.getSittingOutForSession = getSittingOutForSession;
 exports.getLatestHdcp = getLatestHdcp;
 exports.saveHdcp = saveHdcp;
+exports.getHandicapFreezeStatus = getHandicapFreezeStatus;
+exports.freezeHandicaps = freezeHandicaps;
+exports.unfreezeHandicaps = unfreezeHandicaps;
 exports.getMatchPairing = getMatchPairing;
 exports.saveMatchPairing = saveMatchPairing;
 exports.getResultsHistory = getResultsHistory;
@@ -1109,6 +1112,17 @@ async function getLatestHdcp(playerId) {
 async function saveHdcp(playerId, year, hdcpIndex, updatedBy = SCORER_NAME) {
     await config_1.default.query(`INSERT INTO RyderHdcp (Year, PlayerID, Hdcp, HdcpIndex, LastUpdateUser) VALUES (?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE Hdcp = VALUES(Hdcp), HdcpIndex = VALUES(HdcpIndex), LastUpdateUser = VALUES(LastUpdateUser), LastUpdateDt = CURRENT_TIMESTAMP`, [year, playerId, Math.round(hdcpIndex), hdcpIndex, updatedBy]);
+}
+async function getHandicapFreezeStatus(groupId, year) {
+    const [rows] = await config_1.default.query('SELECT FrozenAt FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
+    return { frozen: rows.length > 0, frozenAt: rows.length > 0 ? rows[0].FrozenAt : null };
+}
+async function freezeHandicaps(groupId, year, user) {
+    await config_1.default.query(`INSERT INTO RyderHandicapFreeze (GroupID, Year, FrozenAt, FrozenByUser) VALUES (?, ?, NOW(), ?)
+     ON DUPLICATE KEY UPDATE FrozenAt = VALUES(FrozenAt), FrozenByUser = VALUES(FrozenByUser)`, [groupId, year, user]);
+}
+async function unfreezeHandicaps(groupId, year) {
+    await config_1.default.query('DELETE FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
 }
 /**
  * Get whatever's currently assigned to a match (course + players), for Setup Matches' editor —

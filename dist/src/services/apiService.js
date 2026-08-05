@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
-exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = void 0;
+exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
+exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = void 0;
 exports.pickCurrentSession = pickCurrentSession;
 // Production API URL - always use this for built apps. To test a local backend change,
 // temporarily point this at http://localhost:3000/api and revert before committing (see
@@ -367,6 +367,57 @@ const saveHdcp = async (playerId, year, hdcp) => {
     }
 };
 exports.saveHdcp = saveHdcp;
+/**
+ * Get whether this group's handicaps are frozen for a year.
+ */
+const getHandicapFreezeStatus = async (groupId, year) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/hdcp-freeze?group=${groupId}&year=${year}`);
+        if (!response.ok)
+            return { frozen: false, frozenAt: null };
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching handicap freeze status:', error);
+        return { frozen: false, frozenAt: null };
+    }
+};
+exports.getHandicapFreezeStatus = getHandicapFreezeStatus;
+/**
+ * Freeze this group's handicaps for a year -- the automatic GHIN sync will skip these players
+ * from then on, until unfrozen. Manual edits (Handicaps screen, match pairing form) are unaffected.
+ */
+const freezeHandicaps = async (groupId, year, user) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/hdcp-freeze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ groupId, year, user }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error freezing handicaps:', error);
+        return false;
+    }
+};
+exports.freezeHandicaps = freezeHandicaps;
+/**
+ * Unfreeze this group's handicaps for a year -- the automatic GHIN sync resumes normally.
+ */
+const unfreezeHandicaps = async (groupId, year) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/hdcp-freeze?group=${groupId}&year=${year}`, {
+            method: 'DELETE',
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error unfreezing handicaps:', error);
+        return false;
+    }
+};
+exports.unfreezeHandicaps = unfreezeHandicaps;
 /**
  * Get a match's current course/player pairing via the API server.
  */

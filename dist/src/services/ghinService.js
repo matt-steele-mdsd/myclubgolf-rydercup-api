@@ -44,10 +44,16 @@ async function setPlayerGhinSkip(playerId, skip) {
 async function linkPlayerGhin(playerId, ghin) {
     await config_1.default.query('UPDATE RyderPlayer SET GHIN = ? WHERE PlayerID = ?', [ghin, playerId]);
     try {
+        const year = new Date().getFullYear();
+        const [frozenRows] = await config_1.default.query(`SELECT 1 FROM RyderPlayer p
+       INNER JOIN RyderHandicapFreeze f ON f.GroupID = p.GroupID AND f.Year = ?
+       WHERE p.PlayerID = ?`, [year, playerId]);
+        if (frozenRows.length > 0)
+            return; // this player's group has handicaps frozen -- link the GHIN number, but leave the handicap alone
         const token = await getGhinBearerToken();
         const index = await getGolferIndex(ghin, token);
         if (index !== null) {
-            await (0, ryderService_1.saveHdcp)(playerId, new Date().getFullYear(), index, ryderService_1.GHIN_SYNC_USER);
+            await (0, ryderService_1.saveHdcp)(playerId, year, index, ryderService_1.GHIN_SYNC_USER);
         }
     }
     catch (error) {
@@ -402,15 +408,19 @@ async function findEasyGhinLinks(groupId, year) {
  * tomorrow's automatic refresh.
  */
 async function refreshGhinHandicaps(year, force = false) {
+    // Excludes any player whose group has frozen this Year -- a frozen group's handicaps must
+    // stay exactly as they were at freeze time, regardless of what GHIN has posted since.
+    const frozenClause = `AND NOT EXISTS (SELECT 1 FROM RyderHandicapFreeze f WHERE f.GroupID = p.GroupID AND f.Year = ?)`;
     const [rows] = await config_1.default.query(force
-        ? `SELECT PlayerID, GHIN FROM RyderPlayer WHERE GHIN IS NOT NULL AND GHIN != 0`
+        ? `SELECT p.PlayerID, p.GHIN FROM RyderPlayer p WHERE p.GHIN IS NOT NULL AND p.GHIN != 0 ${frozenClause}`
         : `SELECT p.PlayerID, p.GHIN
          FROM RyderPlayer p
          LEFT JOIN RyderHdcp h ON h.PlayerID = p.PlayerID AND h.Year = (
            SELECT MAX(Year) FROM RyderHdcp WHERE PlayerID = p.PlayerID
          )
          WHERE p.GHIN IS NOT NULL AND p.GHIN != 0
-           AND (h.LastUpdateDt IS NULL OR DATE(h.LastUpdateDt) < CURDATE())`);
+           AND (h.LastUpdateDt IS NULL OR DATE(h.LastUpdateDt) < CURDATE())
+           ${frozenClause}`, [year]);
     if (rows.length === 0)
         return;
     const token = await getGhinBearerToken();
