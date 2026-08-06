@@ -418,7 +418,13 @@ const unfreezeHandicaps = async (groupId, year) => {
     }
 };
 exports.unfreezeHandicaps = unfreezeHandicaps;
-const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: false };
+const DEFAULT_RYDER_OPTIONS = {
+    handicapsEnabled: false,
+    keepScoreEnabled: false,
+    bestBallLowestHandicap: true,
+    altShotLowPct: 60,
+    altShotHighPct: 40,
+};
 /**
  * Get this event's Captain options. Fails open to the same defaults the server uses for a
  * group that's never saved options, so a network error doesn't render broken/blank toggles.

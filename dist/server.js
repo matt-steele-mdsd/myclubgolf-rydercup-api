@@ -443,10 +443,21 @@ app.get('/api/ryder/options', async (req, res) => {
 // Save this event's Captain options
 app.post('/api/ryder/options', async (req, res) => {
     try {
-        const { groupId, handicapsEnabled, keepScoreEnabled } = req.body;
+        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct } = req.body;
         if (!groupId)
             return res.status(400).json({ error: 'groupId is required' });
-        await (0, ryderService_1.saveRyderOptions)(groupId, { handicapsEnabled: !!handicapsEnabled, keepScoreEnabled: !!keepScoreEnabled });
+        const lowPct = altShotLowPct ?? 60;
+        const highPct = altShotHighPct ?? 40;
+        if (!Number.isInteger(lowPct) || !Number.isInteger(highPct) || lowPct < 0 || highPct < 0 || lowPct + highPct !== 100) {
+            return res.status(400).json({ error: 'altShotLowPct and altShotHighPct must be whole numbers that sum to 100' });
+        }
+        await (0, ryderService_1.saveRyderOptions)(groupId, {
+            handicapsEnabled: !!handicapsEnabled,
+            keepScoreEnabled: !!keepScoreEnabled,
+            bestBallLowestHandicap: true,
+            altShotLowPct: lowPct,
+            altShotHighPct: highPct,
+        });
         res.json({ status: 'ok' });
     }
     catch (error) {

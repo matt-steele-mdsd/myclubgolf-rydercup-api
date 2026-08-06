@@ -1140,16 +1140,38 @@ async function freezeHandicaps(groupId, year, user) {
 async function unfreezeHandicaps(groupId, year) {
     await config_1.default.query('DELETE FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
 }
-const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: false };
+const DEFAULT_RYDER_OPTIONS = {
+    handicapsEnabled: false,
+    keepScoreEnabled: false,
+    bestBallLowestHandicap: true,
+    altShotLowPct: 60,
+    altShotHighPct: 40,
+};
 async function getRyderOptions(groupId) {
-    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct FROM RyderOptions WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return DEFAULT_RYDER_OPTIONS;
-    return { handicapsEnabled: !!rows[0].HandicapsEnabled, keepScoreEnabled: !!rows[0].KeepScoreEnabled };
+    const r = rows[0];
+    return {
+        handicapsEnabled: !!r.HandicapsEnabled,
+        keepScoreEnabled: !!r.KeepScoreEnabled,
+        bestBallLowestHandicap: !!r.BestBallLowestHandicap,
+        altShotLowPct: r.AltShotLowPct,
+        altShotHighPct: r.AltShotHighPct,
+    };
 }
 async function saveRyderOptions(groupId, options) {
-    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled) VALUES (?, ?, ?)
-     ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled)`, [groupId, options.handicapsEnabled ? 1 : 0, options.keepScoreEnabled ? 1 : 0]);
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct) VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled),
+       BestBallLowestHandicap = VALUES(BestBallLowestHandicap), AltShotLowPct = VALUES(AltShotLowPct), AltShotHighPct = VALUES(AltShotHighPct)`, [
+        groupId,
+        options.handicapsEnabled ? 1 : 0,
+        options.keepScoreEnabled ? 1 : 0,
+        // Forced true regardless of what's sent -- not a real toggle yet, see the interface doc comment.
+        1,
+        options.altShotLowPct,
+        options.altShotHighPct,
+    ]);
 }
 /**
  * Get whatever's currently assigned to a match (course + players), for Setup Matches' editor —
