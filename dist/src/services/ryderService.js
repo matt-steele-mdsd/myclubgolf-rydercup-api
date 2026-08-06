@@ -52,6 +52,8 @@ exports.getRyderOptions = getRyderOptions;
 exports.saveRyderOptions = saveRyderOptions;
 exports.getMatchPlayerTees = getMatchPlayerTees;
 exports.saveMatchPlayerTee = saveMatchPlayerTee;
+exports.getMatchHoleScores = getMatchHoleScores;
+exports.saveMatchHoleScores = saveMatchHoleScores;
 exports.getMatchPairing = getMatchPairing;
 exports.saveMatchPairing = saveMatchPairing;
 exports.getResultsHistory = getResultsHistory;
@@ -1219,6 +1221,30 @@ async function saveMatchPlayerTee(year, groupId, matchId, playerId, ghinTeeSetId
     await config_1.default.query(`INSERT INTO RyderMatchPlayerTee (GroupID, RyderYear, MatchID, PlayerID, GhinTeeSetId, TeeName, CourseHandicap, LastUpdateUser)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE GhinTeeSetId = VALUES(GhinTeeSetId), TeeName = VALUES(TeeName), CourseHandicap = VALUES(CourseHandicap), LastUpdateUser = VALUES(LastUpdateUser)`, [groupId, year, matchId, playerId, ghinTeeSetId, teeName, courseHandicap, user]);
+}
+/**
+ * A hole's raw per-player gross scores when Keep Score is on -- separate from
+ * `RyderMatchScore.Result`, which stays the single source of truth for the match-play swing
+ * that standings/leaderboard/finalize actually read. This table only exists so a captain
+ * re-opening an already-scored hole sees the numbers they entered instead of a blank form, and
+ * for a possible future net-scorecard view -- computing the winner from these is the client's
+ * job (see strokeAllocation.ts), not this function's.
+ */
+async function getMatchHoleScores(year, groupId, matchId, holeId) {
+    const [rows] = await config_1.default.query('SELECT PlayerID, Score FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ? AND HoleID = ?', [year, groupId, matchId, holeId]);
+    const scores = {};
+    for (const r of rows)
+        scores[r.PlayerID] = r.Score;
+    return scores;
+}
+/** Save every player's gross score for one hole in one go (Alternate Shot saves the same score
+ * under both partners on a side -- see rydermatch.tsx's scoring-unit grouping). */
+async function saveMatchHoleScores(year, groupId, matchId, holeId, scores, user) {
+    for (const s of scores) {
+        await config_1.default.query(`INSERT INTO RyderMatchPlayerScore (RyderYear, GroupID, MatchID, HoleID, PlayerID, Score, LastUpdateUser)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE Score = VALUES(Score), LastUpdateUser = VALUES(LastUpdateUser)`, [year, groupId, matchId, holeId, s.playerId, s.score, user]);
+    }
 }
 /**
  * Get whatever's currently assigned to a match (course + players), for Setup Matches' editor —

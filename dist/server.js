@@ -531,6 +531,39 @@ app.post('/api/ryder/match-tees', async (req, res) => {
         res.status(500).json({ error: 'Failed to save match tee' });
     }
 });
+// Get every player's already-entered gross score for one hole (Keep Score mode)
+app.get('/api/ryder/match-hole-scores', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        const matchId = parseInt(req.query.match);
+        const holeId = parseInt(req.query.hole);
+        if (!year || !matchId || !holeId) {
+            return res.status(400).json({ error: 'year, match, and hole query params are required' });
+        }
+        const scores = await (0, ryderService_1.getMatchHoleScores)(year, groupId, matchId, holeId);
+        res.json(scores);
+    }
+    catch (error) {
+        console.error('Error fetching match hole scores:', error.message);
+        res.status(500).json({ error: 'Failed to fetch match hole scores' });
+    }
+});
+// Save every player's gross score for one hole in one go (Keep Score mode)
+app.post('/api/ryder/match-hole-scores', async (req, res) => {
+    try {
+        const { year, group, match, hole, scores, user } = req.body;
+        if (!year || !match || !hole || !Array.isArray(scores) || scores.length === 0) {
+            return res.status(400).json({ error: 'year, match, hole, and a non-empty scores array are required' });
+        }
+        await (0, ryderService_1.saveMatchHoleScores)(year, group || 1, match, hole, scores, user || 'app');
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error saving match hole scores:', error.message);
+        res.status(500).json({ error: 'Failed to save match hole scores' });
+    }
+});
 // Record a single hole's result
 app.post('/api/ryder/score-hole', async (req, res) => {
     try {
