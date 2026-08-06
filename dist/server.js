@@ -917,11 +917,14 @@ app.get('/api/ryder/events/:groupId/course-history', async (req, res) => {
 // Create a brand-new course with its 18 hole rows
 app.post('/api/ryder/courses', async (req, res) => {
     try {
-        const { courseName, holes, ghinInfo } = req.body;
+        const { courseName, holes, ghinInfo, ghinTeeSets } = req.body;
         if (!courseName || !Array.isArray(holes)) {
             return res.status(400).json({ error: 'courseName and holes are required' });
         }
         const courseId = await (0, ryderService_1.createCourse)(courseName, holes, ghinInfo);
+        if (Array.isArray(ghinTeeSets) && ghinTeeSets.length > 0) {
+            await (0, ghinService_1.saveCourseTeeSets)(courseId, ghinTeeSets);
+        }
         res.json({ courseId });
     }
     catch (error) {
@@ -1061,6 +1064,18 @@ app.post('/api/ryder/ghin/refresh-handicaps', async (req, res) => {
     catch (error) {
         console.error('Error refreshing GHIN handicaps:', error.message);
         res.status(500).json({ error: 'Failed to refresh GHIN handicaps' });
+    }
+});
+// Refresh every GHIN-linked course's cached tee sets from GHIN — called monthly by cron (see
+// refreshAllCourseTeeSets's doc comment for why monthly, not on every lookup).
+app.post('/api/ryder/ghin/refresh-course-tee-sets', async (_req, res) => {
+    try {
+        const result = await (0, ghinService_1.refreshAllCourseTeeSets)();
+        res.json({ success: true, ...result });
+    }
+    catch (error) {
+        console.error('Error refreshing course tee sets:', error.message);
+        res.status(500).json({ error: 'Failed to refresh course tee sets' });
     }
 });
 // When any player's handicap was last actually pulled from the live GHIN Network (Course &

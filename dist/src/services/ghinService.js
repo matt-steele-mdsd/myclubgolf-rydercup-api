@@ -17,6 +17,7 @@ exports.getGhinCourseDetail = getGhinCourseDetail;
 exports.saveCourseTeeSets = saveCourseTeeSets;
 exports.getCachedCourseTeeSets = getCachedCourseTeeSets;
 exports.getPlayerCourseHandicaps = getPlayerCourseHandicaps;
+exports.refreshAllCourseTeeSets = refreshAllCourseTeeSets;
 const config_1 = __importDefault(require("../db/config"));
 const ryderService_1 = require("./ryderService");
 /** Every player on this group's roster, eligible for GHIN linking. */
@@ -606,4 +607,34 @@ async function getPlayerCourseHandicaps(playerId, courseId) {
     }));
     options.sort((a, b) => b.courseHandicap - a.courseHandicap);
     return { index, options };
+}
+/**
+ * Refresh every GHIN-linked course's cached tee sets from GHIN -- ratings/slopes occasionally
+ * change when GHIN re-rates a course, and a tee can be added/removed. Meant to run monthly (see
+ * the cron job), not on every match-start lookup: `getPlayerCourseHandicaps` already caches on
+ * first use and doesn't re-fetch after that, so without this the cache could go stale
+ * indefinitely for a course nobody re-adds. Cheap either way -- reuses one bearer token login
+ * for every course, and only courses with a known GHIN course id are touched.
+ */
+async function refreshAllCourseTeeSets() {
+    const [courseRows] = await config_1.default.query('SELECT CourseID, GHINCourseId FROM Course WHERE GHINCourseId IS NOT NULL');
+    let refreshed = 0;
+    let failed = 0;
+    for (const c of courseRows) {
+        try {
+            const detail = await getGhinCourseDetail(Number(c.GHINCourseId));
+            if (detail && detail.teeSets.length > 0) {
+                await saveCourseTeeSets(c.CourseID, detail.teeSets);
+                refreshed++;
+            }
+            else {
+                failed++;
+            }
+        }
+        catch (e) {
+            console.error(`Failed to refresh tee sets for course ${c.CourseID} (GHIN ${c.GHINCourseId}):`, e.message);
+            failed++;
+        }
+    }
+    return { refreshed, failed };
 }

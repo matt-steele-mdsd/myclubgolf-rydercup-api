@@ -901,14 +901,17 @@ const getEventCourseHistory = async (groupId) => {
 };
 exports.getEventCourseHistory = getEventCourseHistory;
 /**
- * Create a brand-new course with its 18 hole rows. Returns the new CourseID, or null on failure.
+ * Create a brand-new course with its 18 hole rows. `ghinTeeSets`, when provided, is every tee
+ * set GHIN returned for this course (not just the one picked for the hole rows above) -- caches
+ * them all right away so the match-start tee picker never has to hit GHIN live on first use.
+ * Returns the new CourseID, or null on failure.
  */
-const createCourse = async (courseName, holes, ghinInfo) => {
+const createCourse = async (courseName, holes, ghinInfo, ghinTeeSets) => {
     try {
         const response = await fetch(`${API_URL}/ryder/courses`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ courseName, holes, ghinInfo }),
+            body: JSON.stringify({ courseName, holes, ghinInfo, ghinTeeSets }),
         });
         if (!response.ok)
             return null;
