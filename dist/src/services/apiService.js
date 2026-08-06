@@ -424,6 +424,7 @@ const DEFAULT_RYDER_OPTIONS = {
     bestBallLowestHandicap: true,
     altShotLowPct: 60,
     altShotHighPct: 40,
+    nineHoleHalfStrokes: false,
 };
 /**
  * Get this event's Captain options. Fails open to the same defaults the server uses for a

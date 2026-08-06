@@ -443,7 +443,7 @@ app.get('/api/ryder/options', async (req, res) => {
 // Save this event's Captain options
 app.post('/api/ryder/options', async (req, res) => {
     try {
-        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct } = req.body;
+        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes } = req.body;
         if (!groupId)
             return res.status(400).json({ error: 'groupId is required' });
         const lowPct = altShotLowPct ?? 60;
@@ -457,6 +457,7 @@ app.post('/api/ryder/options', async (req, res) => {
             bestBallLowestHandicap: true,
             altShotLowPct: lowPct,
             altShotHighPct: highPct,
+            nineHoleHalfStrokes: !!nineHoleHalfStrokes,
         });
         res.json({ status: 'ok' });
     }

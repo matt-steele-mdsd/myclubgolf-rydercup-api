@@ -1148,9 +1148,10 @@ const DEFAULT_RYDER_OPTIONS = {
     bestBallLowestHandicap: true,
     altShotLowPct: 60,
     altShotHighPct: 40,
+    nineHoleHalfStrokes: false,
 };
 async function getRyderOptions(groupId) {
-    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes FROM RyderOptions WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return DEFAULT_RYDER_OPTIONS;
     const r = rows[0];
@@ -1160,12 +1161,14 @@ async function getRyderOptions(groupId) {
         bestBallLowestHandicap: !!r.BestBallLowestHandicap,
         altShotLowPct: r.AltShotLowPct,
         altShotHighPct: r.AltShotHighPct,
+        nineHoleHalfStrokes: !!r.NineHoleHalfStrokes,
     };
 }
 async function saveRyderOptions(groupId, options) {
-    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct) VALUES (?, ?, ?, ?, ?, ?)
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes) VALUES (?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled),
-       BestBallLowestHandicap = VALUES(BestBallLowestHandicap), AltShotLowPct = VALUES(AltShotLowPct), AltShotHighPct = VALUES(AltShotHighPct)`, [
+       BestBallLowestHandicap = VALUES(BestBallLowestHandicap), AltShotLowPct = VALUES(AltShotLowPct), AltShotHighPct = VALUES(AltShotHighPct),
+       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes)`, [
         groupId,
         options.handicapsEnabled ? 1 : 0,
         options.keepScoreEnabled ? 1 : 0,
@@ -1173,6 +1176,7 @@ async function saveRyderOptions(groupId, options) {
         1,
         options.altShotLowPct,
         options.altShotHighPct,
+        options.nineHoleHalfStrokes ? 1 : 0,
     ]);
 }
 /**
