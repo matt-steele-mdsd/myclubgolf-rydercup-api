@@ -50,6 +50,8 @@ exports.freezeHandicaps = freezeHandicaps;
 exports.unfreezeHandicaps = unfreezeHandicaps;
 exports.getRyderOptions = getRyderOptions;
 exports.saveRyderOptions = saveRyderOptions;
+exports.getMatchPlayerTees = getMatchPlayerTees;
+exports.saveMatchPlayerTee = saveMatchPlayerTee;
 exports.getMatchPairing = getMatchPairing;
 exports.saveMatchPairing = saveMatchPairing;
 exports.getResultsHistory = getResultsHistory;
@@ -1172,6 +1174,37 @@ async function saveRyderOptions(groupId, options) {
         options.altShotLowPct,
         options.altShotHighPct,
     ]);
+}
+/**
+ * Every player in a match plus their teebox pick so far (see RyderMatchPlayerTeeStatus) -- the
+ * live scorer uses this to know whether everyone's picked yet before showing strokes, and the
+ * tee-picker screen uses it to know who's left.
+ */
+async function getMatchPlayerTees(year, groupId, matchId) {
+    const [rows] = await config_1.default.query(`SELECT rm.PlayerID, rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name,
+            t.GhinTeeSetId, t.TeeName, t.CourseHandicap
+     FROM RyderMatch rm
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     LEFT JOIN RyderMatchPlayerTee t ON t.GroupID = rm.GroupID AND t.RyderYear = rm.RyderYear AND t.MatchID = rm.MatchID AND t.PlayerID = rm.PlayerID
+     WHERE rm.RyderYear = ? AND rm.GroupID = ? AND rm.MatchID = ?
+     ORDER BY rm.Team DESC, name`, [year, groupId, matchId]);
+    return rows.map((r) => ({
+        playerId: r.PlayerID,
+        name: r.name,
+        team: r.Team,
+        ghinTeeSetId: r.GhinTeeSetId,
+        teeName: r.TeeName,
+        courseHandicap: r.CourseHandicap,
+    }));
+}
+/** Record one player's teebox pick for a match -- the tee name and Course Handicap are
+ * snapshotted at pick time (not recomputed/rejoined later) so a mid-week GHIN index change or a
+ * tee-set cache refresh doesn't silently shift a match that's already been set up, same
+ * reasoning as RyderHandicapFreeze. */
+async function saveMatchPlayerTee(year, groupId, matchId, playerId, ghinTeeSetId, teeName, courseHandicap, user) {
+    await config_1.default.query(`INSERT INTO RyderMatchPlayerTee (GroupID, RyderYear, MatchID, PlayerID, GhinTeeSetId, TeeName, CourseHandicap, LastUpdateUser)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE GhinTeeSetId = VALUES(GhinTeeSetId), TeeName = VALUES(TeeName), CourseHandicap = VALUES(CourseHandicap), LastUpdateUser = VALUES(LastUpdateUser)`, [groupId, year, matchId, playerId, ghinTeeSetId, teeName, courseHandicap, user]);
 }
 /**
  * Get whatever's currently assigned to a match (course + players), for Setup Matches' editor —

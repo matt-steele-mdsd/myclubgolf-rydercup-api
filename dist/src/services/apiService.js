@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.verifyCaptainPassword = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
-exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = void 0;
+exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.verifyCaptainPassword = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
+exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = void 0;
 exports.pickCurrentSession = pickCurrentSession;
 // Production API URL - always use this for built apps. To test a local backend change,
 // temporarily point this at http://localhost:3000/api and revert before committing (see
@@ -458,6 +458,51 @@ const saveRyderOptions = async (groupId, options) => {
     }
 };
 exports.saveRyderOptions = saveRyderOptions;
+/** Get a player's Course Handicap at every tee of a given course (match-start tee picker). Null
+ * if the player has no handicap on file, or the course has no known GHIN linkage. */
+const getPlayerCourseHandicaps = async (playerId, courseId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/players/${playerId}/course-handicaps?courseId=${courseId}`);
+        if (!response.ok)
+            return null;
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching player course handicaps:', error);
+        return null;
+    }
+};
+exports.getPlayerCourseHandicaps = getPlayerCourseHandicaps;
+/** Get every player in a match plus their teebox pick so far. */
+const getMatchPlayerTees = async (year, groupId, matchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/match-tees?year=${year}&group=${groupId}&match=${matchId}`);
+        if (!response.ok)
+            return [];
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching match tees:', error);
+        return [];
+    }
+};
+exports.getMatchPlayerTees = getMatchPlayerTees;
+/** Record one player's teebox pick for a match. */
+const saveMatchPlayerTee = async (year, groupId, matchId, playerId, ghinTeeSetId, teeName, courseHandicap) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/match-tees`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId, match: matchId, playerId, ghinTeeSetId, teeName, courseHandicap }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error saving match tee:', error);
+        return false;
+    }
+};
+exports.saveMatchPlayerTee = saveMatchPlayerTee;
 /**
  * Verify a candidate Captains password (Menu -> Captains gate). One shared password for the
  * whole app -- see server.ts's verify-captain-password route.

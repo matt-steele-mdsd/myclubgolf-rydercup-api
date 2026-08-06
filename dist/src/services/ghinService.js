@@ -14,6 +14,9 @@ exports.refreshGhinHandicaps = refreshGhinHandicaps;
 exports.getLastGhinRefresh = getLastGhinRefresh;
 exports.searchGhinCourses = searchGhinCourses;
 exports.getGhinCourseDetail = getGhinCourseDetail;
+exports.saveCourseTeeSets = saveCourseTeeSets;
+exports.getCachedCourseTeeSets = getCachedCourseTeeSets;
+exports.getPlayerCourseHandicaps = getPlayerCourseHandicaps;
 const config_1 = __importDefault(require("../db/config"));
 const ryderService_1 = require("./ryderService");
 /** Every player on this group's roster, eligible for GHIN linking. */
@@ -508,4 +511,99 @@ async function getGhinCourseDetail(courseId) {
         state: (data.CourseState || '').replace(/^US-/, '') || null,
         teeSets,
     };
+}
+/**
+ * Cache every GHIN tee set for a course (rating/slope/gender/name + full hole-by-hole
+ * par/hdcp/yards per tee) -- separate from `CourseDetails`, which only ever holds the single tee
+ * an admin picked at Add Course time and is read TeeID-blind everywhere else in the app (session
+ * setup, the live scorer). Adding more tees' holes into `CourseDetails` itself would silently
+ * multiply those joins per extra tee -- this table exists specifically so the match-start tee
+ * picker can be cached without touching anything scoring already reads. Mirrors Scorecard's
+ * courseService.ts saveCourseTeeSets/getCachedCourseTeeSets exactly.
+ *
+ * Replaces whatever was cached for this course before (delete-then-reinsert) -- simplest safe
+ * way to handle both the first cache and a later refresh.
+ */
+async function saveCourseTeeSets(courseId, teeSets) {
+    await config_1.default.query('DELETE FROM CourseTeeSet WHERE CourseID = ?', [courseId]);
+    for (const ts of teeSets) {
+        const result = await config_1.default.query(`INSERT INTO CourseTeeSet (CourseID, GhinTeeSetId, TeeName, Gender, CourseRating, SlopeRating, TotalPar, TotalYardage)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [courseId, ts.teeSetId, ts.teeName, ts.gender, ts.courseRating, ts.slopeRating, ts.totalPar, ts.totalYardage]);
+        const courseTeeSetId = result[0].insertId;
+        if (ts.holes.length > 0) {
+            const rowPlaceholders = ts.holes.map(() => '(?, ?, ?, ?, ?)').join(', ');
+            const params = ts.holes.flatMap((h) => [courseTeeSetId, h.holeNum, h.par, h.hdcp, h.yards]);
+            await config_1.default.query(`INSERT INTO CourseTeeHole (CourseTeeSetID, HoleNum, Par, Hdcp, Yards) VALUES ${rowPlaceholders}`, params);
+        }
+    }
+}
+/**
+ * Read back this course's cached GHIN tee sets (see `saveCourseTeeSets`). Returns null when
+ * nothing's been cached yet for this course, which callers should treat as "fall back to a live
+ * GHIN fetch" -- not an empty array, which would mean "cached, and GHIN genuinely has no tee data."
+ */
+async function getCachedCourseTeeSets(courseId) {
+    const [rows] = await config_1.default.query(`SELECT ts.CourseTeeSetID, ts.GhinTeeSetId, ts.TeeName, ts.Gender, ts.CourseRating, ts.SlopeRating, ts.TotalPar, ts.TotalYardage,
+            h.HoleNum, h.Par, h.Hdcp, h.Yards
+     FROM CourseTeeSet ts
+     LEFT JOIN CourseTeeHole h ON h.CourseTeeSetID = ts.CourseTeeSetID
+     WHERE ts.CourseID = ?
+     ORDER BY ts.CourseTeeSetID, h.HoleNum`, [courseId]);
+    if (rows.length === 0)
+        return null;
+    const byTeeSet = new Map();
+    for (const r of rows) {
+        if (!byTeeSet.has(r.CourseTeeSetID)) {
+            byTeeSet.set(r.CourseTeeSetID, {
+                teeSetId: r.GhinTeeSetId,
+                teeName: r.TeeName,
+                gender: r.Gender,
+                courseRating: r.CourseRating !== null ? Number(r.CourseRating) : null,
+                slopeRating: r.SlopeRating,
+                totalPar: r.TotalPar,
+                totalYardage: r.TotalYardage,
+                holes: [],
+            });
+        }
+        if (r.HoleNum !== null) {
+            byTeeSet.get(r.CourseTeeSetID).holes.push({ holeNum: r.HoleNum, par: r.Par, hdcp: r.Hdcp, yards: r.Yards });
+        }
+    }
+    return Array.from(byTeeSet.values());
+}
+/**
+ * Get a player's current handicap index + Course Handicap per tee at a given course, for the
+ * match-start tee picker. Reuses whatever's already on file in RyderHdcp (the same "most recent
+ * index on record" every other screen shows, kept fresh by GHIN Sync/Check Easy Links) rather
+ * than doing a second live GHIN fetch here -- unlike Scorecard, which caches the index directly
+ * on the player row, RyderCup already has that caching layer in RyderHdcp. Returns null if the
+ * player has no index on file, or this course has no known GHIN course id (never linked via
+ * GHIN search) and no cached tee sets either.
+ */
+async function getPlayerCourseHandicaps(playerId, courseId) {
+    const [hdcpRows] = await config_1.default.query(`SELECT COALESCE(HdcpIndex, Hdcp) AS index_value FROM RyderHdcp
+     WHERE PlayerID = ? AND Year = (SELECT MAX(Year) FROM RyderHdcp WHERE PlayerID = ?)`, [playerId, playerId]);
+    const index = hdcpRows[0]?.index_value != null ? Number(hdcpRows[0].index_value) : null;
+    if (index === null)
+        return null;
+    let teeSets = await getCachedCourseTeeSets(courseId);
+    if (teeSets === null) {
+        const [courseRows] = await config_1.default.query('SELECT GHINCourseId FROM Course WHERE CourseID = ?', [courseId]);
+        const ghinCourseId = courseRows[0]?.GHINCourseId;
+        if (!ghinCourseId)
+            return null;
+        const detail = await getGhinCourseDetail(Number(ghinCourseId));
+        teeSets = detail?.teeSets ?? [];
+        if (teeSets.length > 0) {
+            saveCourseTeeSets(courseId, teeSets).catch((e) => console.error('Failed to cache course tee sets:', e.message));
+        }
+    }
+    const withRatings = teeSets.filter((ts) => ts.courseRating !== null && ts.slopeRating !== null);
+    const options = withRatings.map((ts) => ({
+        teeSetId: ts.teeSetId,
+        teeName: ts.teeName,
+        courseHandicap: Math.round(index * (Number(ts.slopeRating) / 113) + (Number(ts.courseRating) - ts.totalPar)),
+    }));
+    options.sort((a, b) => b.courseHandicap - a.courseHandicap);
+    return { index, options };
 }

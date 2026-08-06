@@ -498,6 +498,38 @@ app.post('/api/ryder/match-pairing', async (req, res) => {
         res.status(500).json({ error: 'Failed to save match pairing' });
     }
 });
+// Get a match's players and their teebox picks so far (live scorer's tee-picker gate)
+app.get('/api/ryder/match-tees', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        const matchId = parseInt(req.query.match);
+        if (!year || !matchId) {
+            return res.status(400).json({ error: 'year and match query params are required' });
+        }
+        const tees = await (0, ryderService_1.getMatchPlayerTees)(year, groupId, matchId);
+        res.json(tees);
+    }
+    catch (error) {
+        console.error('Error fetching match tees:', error.message);
+        res.status(500).json({ error: 'Failed to fetch match tees' });
+    }
+});
+// Record one player's teebox pick for a match
+app.post('/api/ryder/match-tees', async (req, res) => {
+    try {
+        const { year, group, match, playerId, ghinTeeSetId, teeName, courseHandicap, user } = req.body;
+        if (!year || !match || !playerId || !ghinTeeSetId || !teeName || courseHandicap === undefined) {
+            return res.status(400).json({ error: 'year, match, playerId, ghinTeeSetId, teeName, and courseHandicap are required' });
+        }
+        await (0, ryderService_1.saveMatchPlayerTee)(year, group || 1, match, playerId, ghinTeeSetId, teeName, courseHandicap, user || 'app');
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error saving match tee:', error.message);
+        res.status(500).json({ error: 'Failed to save match tee' });
+    }
+});
 // Record a single hole's result
 app.post('/api/ryder/score-hole', async (req, res) => {
     try {
@@ -929,6 +961,22 @@ app.get('/api/ryder/ghin/course-detail', async (req, res) => {
     catch (error) {
         console.error('Error fetching GHIN course detail:', error.message);
         res.status(500).json({ error: 'Failed to fetch GHIN course detail' });
+    }
+});
+// A player's current handicap index + Course Handicap per tee at a course (match-start tee picker)
+app.get('/api/ryder/players/:id/course-handicaps', async (req, res) => {
+    try {
+        const playerId = parseInt(req.params.id);
+        const courseId = parseInt(req.query.courseId);
+        if (!courseId) {
+            return res.status(400).json({ error: 'courseId query param is required' });
+        }
+        const result = await (0, ghinService_1.getPlayerCourseHandicaps)(playerId, courseId);
+        res.json(result);
+    }
+    catch (error) {
+        console.error('Error fetching player course handicaps:', error.message);
+        res.status(500).json({ error: 'Failed to fetch course handicaps' });
     }
 });
 // Get the GHIN-linking player list for a group
