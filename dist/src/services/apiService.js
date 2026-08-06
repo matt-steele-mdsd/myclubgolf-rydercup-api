@@ -473,17 +473,18 @@ const getPlayerCourseHandicaps = async (playerId, courseId) => {
     }
 };
 exports.getPlayerCourseHandicaps = getPlayerCourseHandicaps;
-/** Get every player in a match plus their teebox pick so far. */
+/** Get a match's course/format context plus every player's teebox pick so far. Null if the
+ * match doesn't exist. */
 const getMatchPlayerTees = async (year, groupId, matchId) => {
     try {
         const response = await fetch(`${API_URL}/ryder/match-tees?year=${year}&group=${groupId}&match=${matchId}`);
         if (!response.ok)
-            return [];
+            return null;
         return (await response.json());
     }
     catch (error) {
         console.error('Error fetching match tees:', error);
-        return [];
+        return null;
     }
 };
 exports.getMatchPlayerTees = getMatchPlayerTees;

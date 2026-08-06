@@ -1176,26 +1176,36 @@ async function saveRyderOptions(groupId, options) {
     ]);
 }
 /**
- * Every player in a match plus their teebox pick so far (see RyderMatchPlayerTeeStatus) -- the
+ * A match's course/format plus every player's teebox pick so far (see RyderMatchTeesInfo) -- the
  * live scorer uses this to know whether everyone's picked yet before showing strokes, and the
- * tee-picker screen uses it to know who's left.
+ * tee-picker screen uses it to know who's left and which course to offer tees for.
  */
 async function getMatchPlayerTees(year, groupId, matchId) {
-    const [rows] = await config_1.default.query(`SELECT rm.PlayerID, rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name,
+    const [rows] = await config_1.default.query(`SELECT rm.PlayerID, rm.Team, rm.CourseID, c.CourseName, rs.Format,
+            CONCAT(rp.FirstName, ' ', rp.LastName) AS name,
             t.GhinTeeSetId, t.TeeName, t.CourseHandicap
      FROM RyderMatch rm
      INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN Course c ON c.CourseID = rm.CourseID
+     LEFT JOIN RyderSession rs ON rs.GroupID = rm.GroupID AND rs.RyderYear = rm.RyderYear AND rs.SessionID = rm.SessionID
      LEFT JOIN RyderMatchPlayerTee t ON t.GroupID = rm.GroupID AND t.RyderYear = rm.RyderYear AND t.MatchID = rm.MatchID AND t.PlayerID = rm.PlayerID
      WHERE rm.RyderYear = ? AND rm.GroupID = ? AND rm.MatchID = ?
      ORDER BY rm.Team DESC, name`, [year, groupId, matchId]);
-    return rows.map((r) => ({
-        playerId: r.PlayerID,
-        name: r.name,
-        team: r.Team,
-        ghinTeeSetId: r.GhinTeeSetId,
-        teeName: r.TeeName,
-        courseHandicap: r.CourseHandicap,
-    }));
+    if (rows.length === 0)
+        return null;
+    return {
+        courseId: rows[0].CourseID,
+        courseName: rows[0].CourseName,
+        format: rows[0].Format,
+        players: rows.map((r) => ({
+            playerId: r.PlayerID,
+            name: r.name,
+            team: r.Team,
+            ghinTeeSetId: r.GhinTeeSetId,
+            teeName: r.TeeName,
+            courseHandicap: r.CourseHandicap,
+        })),
+    };
 }
 /** Record one player's teebox pick for a match -- the tee name and Course Handicap are
  * snapshotted at pick time (not recomputed/rejoined later) so a mid-week GHIN index change or a
