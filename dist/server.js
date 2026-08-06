@@ -520,7 +520,9 @@ app.get('/api/ryder/match-tees', async (req, res) => {
 app.post('/api/ryder/match-tees', async (req, res) => {
     try {
         const { year, group, match, playerId, ghinTeeSetId, teeName, courseHandicap, user } = req.body;
-        if (!year || !match || !playerId || !ghinTeeSetId || !teeName || courseHandicap === undefined) {
+        // ghinTeeSetId is intentionally checked with === undefined, not truthiness -- 0 is the real,
+        // valid sentinel matchtees.tsx sends for a manually-entered handicap (no real GHIN tee).
+        if (!year || !match || !playerId || ghinTeeSetId === undefined || !teeName || courseHandicap === undefined) {
             return res.status(400).json({ error: 'year, match, playerId, ghinTeeSetId, teeName, and courseHandicap are required' });
         }
         await (0, ryderService_1.saveMatchPlayerTee)(year, group || 1, match, playerId, ghinTeeSetId, teeName, courseHandicap, user || 'app');
