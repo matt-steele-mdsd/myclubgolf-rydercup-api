@@ -229,12 +229,12 @@ exports.getSessionsForYear = getSessionsForYear;
 /**
  * Create a new session for a year via the API server (Setup Sessions -> Add Session).
  */
-const createSession = async (year, groupId, name, type, holes, teamSize, courseId) => {
+const createSession = async (year, groupId, name, type, holes, teamSize, format, courseId) => {
     try {
         const response = await fetch(`${API_URL}/ryder/sessions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ year, group: groupId, name, type, holes, teamSize, courseId }),
+            body: JSON.stringify({ year, group: groupId, name, type, holes, teamSize, format, courseId }),
         });
         if (!response.ok)
             return null;
@@ -250,12 +250,12 @@ exports.createSession = createSession;
  * Edit a session's name/type/holes/course via the API server (Admin -> Setup Sessions pencil
  * icon).
  */
-const updateSession = async (year, groupId, sessionId, name, type, holes, teamSize, courseId) => {
+const updateSession = async (year, groupId, sessionId, name, type, holes, teamSize, format, courseId) => {
     try {
         const response = await fetch(`${API_URL}/ryder/sessions`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ year, group: groupId, session: sessionId, name, type, holes, teamSize, courseId }),
+            body: JSON.stringify({ year, group: groupId, session: sessionId, name, type, holes, teamSize, format, courseId }),
         });
         return response.ok;
     }

@@ -238,14 +238,17 @@ app.get('/api/ryder/sessions', async (req, res) => {
 // Create a new session for a year/group (Admin -> Setup Sessions "+ Add Session")
 app.post('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, name, type, holes, teamSize, courseId } = req.body;
+        const { year, group, name, type, holes, teamSize, format, courseId } = req.body;
         if (!year || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, name, type (T or I), and holes (F, B, or A) are required' });
         }
         if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
             return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
         }
-        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes, teamSize ?? null, courseId ?? null);
+        if (format !== undefined && format !== null && !['B', 'A', 'O'].includes(format)) {
+            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), or O (Other)' });
+        }
+        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes, teamSize ?? null, format ?? null, courseId ?? null);
         res.json(session);
     }
     catch (error) {
@@ -253,17 +256,20 @@ app.post('/api/ryder/sessions', async (req, res) => {
         res.status(500).json({ error: 'Failed to create session' });
     }
 });
-// Edit a session's name/type/holes (Admin -> Setup Sessions pencil icon)
+// Edit a session's name/type/holes/format (Admin -> Setup Sessions pencil icon)
 app.put('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, session, name, type, holes, teamSize, courseId } = req.body;
+        const { year, group, session, name, type, holes, teamSize, format, courseId } = req.body;
         if (!year || !session || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, session, name, type (T or I), and holes (F, B, or A) are required' });
         }
         if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
             return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
         }
-        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes, teamSize ?? null, courseId ?? null);
+        if (format !== undefined && format !== null && !['B', 'A', 'O'].includes(format)) {
+            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), or O (Other)' });
+        }
+        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes, teamSize ?? null, format ?? null, courseId ?? null);
         res.json({ status: 'ok' });
     }
     catch (error) {

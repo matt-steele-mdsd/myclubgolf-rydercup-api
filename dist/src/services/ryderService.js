@@ -223,7 +223,7 @@ async function getEventCourseHistory(groupId) {
  * why). `matchCount` is how many distinct matches exist in that session so far.
  */
 async function getSessionsForYear(groupId, year) {
-    const [rows] = await config_1.default.query(`SELECT rs.SessionID, rs.Name, rs.Type, rs.TeamSize, rs.Holes, rs.CourseID, c.CourseName,
+    const [rows] = await config_1.default.query(`SELECT rs.SessionID, rs.Name, rs.Type, rs.TeamSize, rs.Format, rs.Holes, rs.CourseID, c.CourseName,
        (SELECT COUNT(DISTINCT rm.MatchID) FROM RyderMatch rm
         WHERE rm.RyderYear = rs.RyderYear AND rm.GroupID = rs.GroupID AND rm.SessionID = rs.SessionID) AS matchCount,
        (SELECT COUNT(DISTINCT rmr.MatchID) FROM RyderMatchResults rmr
@@ -237,6 +237,7 @@ async function getSessionsForYear(groupId, year) {
         name: r.Name,
         type: r.Type,
         teamSize: r.TeamSize,
+        format: r.Format,
         holes: r.Holes,
         courseId: r.CourseID,
         courseName: r.CourseName,
@@ -247,30 +248,43 @@ async function getSessionsForYear(groupId, year) {
 /**
  * Create a new session for a year/group — SessionID is allocated as MAX(SessionID)+1 for
  * that year/group (starting at 1), same allocation pattern already used for RyderEvents'
- * GroupID and RyderMatch's MatchID. `teamSize` (players per side, 2-4) only means anything for
- * a Team session — stored as null for Individual. `courseId` is null unless this session is
- * played somewhere other than the event's default course for the year.
+ * GroupID and RyderMatch's MatchID. `teamSize` (players per side, 2-4) and `format` only mean
+ * anything for a Team session -- both stored as null for Individual. `format` distinguishes
+ * Better Ball ('B') from Alternate Shot ('A') from anything else ('O') -- each needs different
+ * handicap-allowance math (confirmed with Matt 2026-08-06: Better Ball always plays off the
+ * match's lowest handicap, Alternate Shot splits the team's course handicap by an editable
+ * percentage between partners, defaulting 60/40). 'Other' exists because team sizes of 3-4 and
+ * miscellaneous formats don't fit either rule -- Handicaps and Keep Score aren't meant to be
+ * usable on an 'O' session once that wiring exists, since there's no defined rule for it.
+ * `courseId` is null unless this session is played somewhere other than the event's default
+ * course for the year.
  */
-async function createSession(groupId, year, name, type, holes, teamSize, courseId) {
+async function createSession(groupId, year, name, type, holes, teamSize, format, courseId) {
     const [rows] = await config_1.default.query('SELECT COALESCE(MAX(SessionID), 0) + 1 AS nextId FROM RyderSession WHERE GroupID = ? AND RyderYear = ?', [groupId, year]);
     const sessionId = rows[0].nextId;
     const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
-    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, holes, courseId, SCORER_NAME]);
+    const resolvedFormat = type === 'T' ? (format ?? 'O') : null;
+    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Format, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, resolvedFormat, holes, courseId, SCORER_NAME]);
     let courseName = null;
     if (courseId !== null) {
         const [courseRows] = await config_1.default.query('SELECT CourseName FROM Course WHERE CourseID = ?', [courseId]);
         courseName = courseRows[0]?.CourseName ?? null;
     }
-    return { sessionId, name, type, teamSize: resolvedTeamSize, holes, courseId, courseName, matchCount: 0, completedCount: 0 };
+    return {
+        sessionId, name, type, teamSize: resolvedTeamSize, format: resolvedFormat, holes, courseId, courseName,
+        matchCount: 0, completedCount: 0,
+    };
 }
 /**
- * Edit a session's name/type/holes/course in place — plans can change (e.g. going from team to
- * individual, renaming, or switching courses) even after matches already exist in it. Existing
- * matches keep their players/course; only the session's own definition changes.
+ * Edit a session's name/type/holes/format/course in place — plans can change (e.g. going from
+ * team to individual, renaming, switching courses, or reclassifying the format) even after
+ * matches already exist in it. Existing matches keep their players/course; only the session's
+ * own definition changes.
  */
-async function updateSession(groupId, year, sessionId, name, type, holes, teamSize, courseId) {
+async function updateSession(groupId, year, sessionId, name, type, holes, teamSize, format, courseId) {
     const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
-    await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, TeamSize = ?, Holes = ?, CourseID = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, resolvedTeamSize, holes, courseId, SCORER_NAME, groupId, year, sessionId]);
+    const resolvedFormat = type === 'T' ? (format ?? 'O') : null;
+    await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, TeamSize = ?, Format = ?, Holes = ?, CourseID = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, resolvedTeamSize, resolvedFormat, holes, courseId, SCORER_NAME, groupId, year, sessionId]);
 }
 /**
  * Delete a session and every match in it (plus that match's hole scores/results) — a session
