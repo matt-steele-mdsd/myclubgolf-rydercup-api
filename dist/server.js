@@ -428,14 +428,11 @@ app.post('/api/ryder/verify-captain-password', (req, res) => {
     }
     res.json({ valid: password === expected });
 });
-// Get this group+year's Captain options (Captains -> Options)
+// Get this event's Captain options (Captains -> Options) -- scoped per GroupID, not per year
 app.get('/api/ryder/options', async (req, res) => {
     try {
         const groupId = parseInt(req.query.group || '1');
-        const year = parseInt(req.query.year);
-        if (!year)
-            return res.status(400).json({ error: 'year query param is required' });
-        const options = await (0, ryderService_1.getRyderOptions)(groupId, year);
+        const options = await (0, ryderService_1.getRyderOptions)(groupId);
         res.json(options);
     }
     catch (error) {
@@ -443,13 +440,13 @@ app.get('/api/ryder/options', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch options' });
     }
 });
-// Save this group+year's Captain options
+// Save this event's Captain options
 app.post('/api/ryder/options', async (req, res) => {
     try {
-        const { groupId, year, handicapsEnabled, keepScoreEnabled } = req.body;
-        if (!groupId || !year)
-            return res.status(400).json({ error: 'groupId and year are required' });
-        await (0, ryderService_1.saveRyderOptions)(groupId, year, { handicapsEnabled: !!handicapsEnabled, keepScoreEnabled: !!keepScoreEnabled });
+        const { groupId, handicapsEnabled, keepScoreEnabled } = req.body;
+        if (!groupId)
+            return res.status(400).json({ error: 'groupId is required' });
+        await (0, ryderService_1.saveRyderOptions)(groupId, { handicapsEnabled: !!handicapsEnabled, keepScoreEnabled: !!keepScoreEnabled });
         res.json({ status: 'ok' });
     }
     catch (error) {

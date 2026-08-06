@@ -420,12 +420,12 @@ const unfreezeHandicaps = async (groupId, year) => {
 exports.unfreezeHandicaps = unfreezeHandicaps;
 const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: false };
 /**
- * Get this group+year's Captain options. Fails open to the same defaults the server uses for
- * a group that's never saved options, so a network error doesn't render broken/blank toggles.
+ * Get this event's Captain options. Fails open to the same defaults the server uses for a
+ * group that's never saved options, so a network error doesn't render broken/blank toggles.
  */
-const getRyderOptions = async (year, groupId) => {
+const getRyderOptions = async (groupId) => {
     try {
-        const response = await fetch(`${API_URL}/ryder/options?year=${year}&group=${groupId}`);
+        const response = await fetch(`${API_URL}/ryder/options?group=${groupId}`);
         if (!response.ok)
             return DEFAULT_RYDER_OPTIONS;
         return (await response.json());
@@ -436,13 +436,13 @@ const getRyderOptions = async (year, groupId) => {
     }
 };
 exports.getRyderOptions = getRyderOptions;
-/** Save this group+year's Captain options. */
-const saveRyderOptions = async (groupId, year, options) => {
+/** Save this event's Captain options. */
+const saveRyderOptions = async (groupId, options) => {
     try {
         const response = await fetch(`${API_URL}/ryder/options`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ groupId, year, ...options }),
+            body: JSON.stringify({ groupId, ...options }),
         });
         return response.ok;
     }

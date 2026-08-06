@@ -1141,15 +1141,15 @@ async function unfreezeHandicaps(groupId, year) {
     await config_1.default.query('DELETE FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
 }
 const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: false };
-async function getRyderOptions(groupId, year) {
-    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled FROM RyderOptions WHERE GroupID = ? AND Year = ?', [groupId, year]);
+async function getRyderOptions(groupId) {
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled FROM RyderOptions WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return DEFAULT_RYDER_OPTIONS;
     return { handicapsEnabled: !!rows[0].HandicapsEnabled, keepScoreEnabled: !!rows[0].KeepScoreEnabled };
 }
-async function saveRyderOptions(groupId, year, options) {
-    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, Year, HandicapsEnabled, KeepScoreEnabled) VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled)`, [groupId, year, options.handicapsEnabled ? 1 : 0, options.keepScoreEnabled ? 1 : 0]);
+async function saveRyderOptions(groupId, options) {
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled)`, [groupId, options.handicapsEnabled ? 1 : 0, options.keepScoreEnabled ? 1 : 0]);
 }
 /**
  * Get whatever's currently assigned to a match (course + players), for Setup Matches' editor —
