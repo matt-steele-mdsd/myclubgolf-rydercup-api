@@ -408,6 +408,20 @@ app.delete('/api/ryder/hdcp-freeze', async (req, res) => {
         res.status(500).json({ error: 'Failed to unfreeze handicaps' });
     }
 });
+// Verify a candidate Captains password (Menu -> Captains gate). One shared password for the
+// whole app (CAPTAIN_PASSWORD env var), not per-event like Scorecard's Admin password --
+// RyderCup only ever has captains for the one active event at a time. Stateless: the client
+// remembers "verified today" locally (see src/utils/captainAuth.ts), this endpoint just checks
+// the candidate against the env var on each attempt.
+app.post('/api/ryder/verify-captain-password', (req, res) => {
+    const { password } = req.body;
+    const expected = process.env.CAPTAIN_PASSWORD;
+    if (!expected) {
+        console.error('CAPTAIN_PASSWORD env var is not set');
+        return res.status(500).json({ error: 'Captain password not configured' });
+    }
+    res.json({ valid: password === expected });
+});
 // Get a match's current course/player pairing (Admin -> Setup Matches editor)
 app.get('/api/ryder/match-pairing', async (req, res) => {
     try {
