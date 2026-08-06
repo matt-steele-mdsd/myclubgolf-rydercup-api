@@ -4,7 +4,7 @@ exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory
 exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = void 0;
 exports.pickCurrentSession = pickCurrentSession;
 // Production API URL - always use this for built apps. To test a local backend change,
-// temporarily point this at https://ryder-api.myclubgolf.com/api and revert before committing (see
+// temporarily point this at http://localhost:3000/api and revert before committing (see
 // phoneAI's AGENTS.md for the same convention).
 const API_URL = 'https://ryder-api.myclubgolf.com/api';
 /**
@@ -418,7 +418,7 @@ const unfreezeHandicaps = async (groupId, year) => {
     }
 };
 exports.unfreezeHandicaps = unfreezeHandicaps;
-const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: true };
+const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: false };
 /**
  * Get this group+year's Captain options. Fails open to the same defaults the server uses for
  * a group that's never saved options, so a network error doesn't render broken/blank toggles.

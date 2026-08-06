@@ -1126,7 +1126,7 @@ async function freezeHandicaps(groupId, year, user) {
 async function unfreezeHandicaps(groupId, year) {
     await config_1.default.query('DELETE FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
 }
-const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: true };
+const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: false };
 async function getRyderOptions(groupId, year) {
     const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled FROM RyderOptions WHERE GroupID = ? AND Year = ?', [groupId, year]);
     if (rows.length === 0)
