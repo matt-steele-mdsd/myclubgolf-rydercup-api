@@ -422,6 +422,35 @@ app.post('/api/ryder/verify-captain-password', (req, res) => {
     }
     res.json({ valid: password === expected });
 });
+// Get this group+year's Captain options (Captains -> Options)
+app.get('/api/ryder/options', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const year = parseInt(req.query.year);
+        if (!year)
+            return res.status(400).json({ error: 'year query param is required' });
+        const options = await (0, ryderService_1.getRyderOptions)(groupId, year);
+        res.json(options);
+    }
+    catch (error) {
+        console.error('Error fetching Ryder options:', error.message);
+        res.status(500).json({ error: 'Failed to fetch options' });
+    }
+});
+// Save this group+year's Captain options
+app.post('/api/ryder/options', async (req, res) => {
+    try {
+        const { groupId, year, handicapsEnabled, keepScoreEnabled } = req.body;
+        if (!groupId || !year)
+            return res.status(400).json({ error: 'groupId and year are required' });
+        await (0, ryderService_1.saveRyderOptions)(groupId, year, { handicapsEnabled: !!handicapsEnabled, keepScoreEnabled: !!keepScoreEnabled });
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error saving Ryder options:', error.message);
+        res.status(500).json({ error: 'Failed to save options' });
+    }
+});
 // Get a match's current course/player pairing (Admin -> Setup Matches editor)
 app.get('/api/ryder/match-pairing', async (req, res) => {
     try {

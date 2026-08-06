@@ -48,6 +48,8 @@ exports.saveHdcp = saveHdcp;
 exports.getHandicapFreezeStatus = getHandicapFreezeStatus;
 exports.freezeHandicaps = freezeHandicaps;
 exports.unfreezeHandicaps = unfreezeHandicaps;
+exports.getRyderOptions = getRyderOptions;
+exports.saveRyderOptions = saveRyderOptions;
 exports.getMatchPairing = getMatchPairing;
 exports.saveMatchPairing = saveMatchPairing;
 exports.getResultsHistory = getResultsHistory;
@@ -1123,6 +1125,17 @@ async function freezeHandicaps(groupId, year, user) {
 }
 async function unfreezeHandicaps(groupId, year) {
     await config_1.default.query('DELETE FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
+}
+const DEFAULT_RYDER_OPTIONS = { handicapsEnabled: false, keepScoreEnabled: true };
+async function getRyderOptions(groupId, year) {
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled FROM RyderOptions WHERE GroupID = ? AND Year = ?', [groupId, year]);
+    if (rows.length === 0)
+        return DEFAULT_RYDER_OPTIONS;
+    return { handicapsEnabled: !!rows[0].HandicapsEnabled, keepScoreEnabled: !!rows[0].KeepScoreEnabled };
+}
+async function saveRyderOptions(groupId, year, options) {
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, Year, HandicapsEnabled, KeepScoreEnabled) VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled)`, [groupId, year, options.handicapsEnabled ? 1 : 0, options.keepScoreEnabled ? 1 : 0]);
 }
 /**
  * Get whatever's currently assigned to a match (course + players), for Setup Matches' editor —
