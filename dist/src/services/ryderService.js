@@ -329,7 +329,12 @@ async function getSessionsForYear(groupId, year) {
        (SELECT COUNT(DISTINCT rm.MatchID) FROM RyderMatch rm
         WHERE rm.RyderYear = rs.RyderYear AND rm.GroupID = rs.GroupID AND rm.SessionID = rs.SessionID) AS matchCount,
        (SELECT COUNT(DISTINCT rmr.MatchID) FROM RyderMatchResults rmr
-        WHERE rmr.RyderYear = rs.RyderYear AND rmr.GroupID = rs.GroupID AND rmr.SessionID = rs.SessionID) AS completedCount
+        WHERE rmr.RyderYear = rs.RyderYear AND rmr.GroupID = rs.GroupID AND rmr.SessionID = rs.SessionID) AS completedCount,
+       EXISTS (
+         SELECT 1 FROM RyderMatchScore rms
+         INNER JOIN RyderMatch rm2 ON rm2.MatchID = rms.MatchID AND rm2.RyderYear = rms.RyderYear AND rm2.GroupID = rms.GroupID
+         WHERE rm2.SessionID = rs.SessionID AND rm2.RyderYear = rs.RyderYear AND rm2.GroupID = rs.GroupID
+       ) AS hasScores
      FROM RyderSession rs
      LEFT JOIN Course c ON c.CourseID = rs.CourseID
      WHERE rs.GroupID = ? AND rs.RyderYear = ?
@@ -345,6 +350,7 @@ async function getSessionsForYear(groupId, year) {
         courseName: r.CourseName,
         matchCount: Number(r.matchCount),
         completedCount: Number(r.completedCount),
+        hasScores: !!r.hasScores,
     }));
 }
 /**
@@ -374,7 +380,7 @@ async function createSession(groupId, year, name, type, holes, teamSize, format,
     }
     return {
         sessionId, name, type, teamSize: resolvedTeamSize, format: resolvedFormat, holes, courseId, courseName,
-        matchCount: 0, completedCount: 0,
+        matchCount: 0, completedCount: 0, hasScores: false,
     };
 }
 /**
