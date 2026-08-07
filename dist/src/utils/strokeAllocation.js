@@ -19,6 +19,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.computeMatchStrokes = computeMatchStrokes;
+exports.buildStrokeSummaryLines = buildStrokeSummaryLines;
 exports.getScoringUnits = getScoringUnits;
 exports.computeHoleWinnerFromScores = computeHoleWinnerFromScores;
 /**
@@ -91,6 +92,66 @@ function computeMatchStrokes(input) {
         result.set(p.playerId, allocate(p.eff - minEff));
     }
     return result;
+}
+/**
+ * Plain-English explanation of who plays off scratch and which holes everyone else strokes on
+ * for a match, shown once up front (matchtees.tsx, before "Start Match") rather than repeated
+ * on hole 1/10 -- confirmed with Matt 2026-08-06: the per-hole "Strokes This Hole" box is the
+ * ongoing in-play reference, this is just the up-front orientation. 'O' sessions never get
+ * strokes (no defined rule), so there's nothing to explain for those.
+ */
+function buildStrokeSummaryLines(allocation, players, format) {
+    if (format === 'O' || players.length === 0)
+        return [];
+    const holesList = (playerId) => Object.entries(allocation.get(playerId) ?? {})
+        .map(([h, s]) => ({ hole: Number(h), strokes: s }))
+        .filter((h) => h.strokes > 0)
+        .sort((a, b) => a.hole - b.hole);
+    const totalFor = (playerId) => holesList(playerId).reduce((sum, h) => sum + h.strokes, 0);
+    const formatHoles = (hs) => hs.map((h) => (h.strokes === 1 ? `${h.hole}` : `${h.hole} (${h.strokes})`)).join(', ');
+    const lines = [];
+    if (format === 'A') {
+        const teamU = players.filter((p) => p.team === 'U');
+        const teamE = players.filter((p) => p.team === 'E');
+        const uTotal = teamU[0] ? totalFor(teamU[0].playerId) : 0;
+        const eTotal = teamE[0] ? totalFor(teamE[0].playerId) : 0;
+        const scratchTeam = uTotal <= eTotal ? teamU : teamE;
+        const strokeTeam = uTotal <= eTotal ? teamE : teamU;
+        lines.push({
+            prefix: 'We are playing off the lower team handicap: ',
+            boldName: scratchTeam.map((p) => p.name).join(' & '),
+            suffix: ' — that team gets no strokes.',
+        });
+        if (strokeTeam.length > 0 && eTotal !== uTotal) {
+            const total = totalFor(strokeTeam[0].playerId);
+            lines.push({
+                prefix: '',
+                boldName: strokeTeam.map((p) => p.name).join(' & '),
+                suffix: ` get ${total} stroke${total === 1 ? '' : 's'}: holes ${formatHoles(holesList(strokeTeam[0].playerId))}.`,
+            });
+        }
+    }
+    else {
+        const scratchPlayer = players.reduce((min, p) => (totalFor(p.playerId) < totalFor(min.playerId) ? p : min));
+        lines.push({
+            prefix: 'We are playing off the lowest handicap, which is ',
+            boldName: scratchPlayer.name,
+            suffix: ' — that person gets no strokes.',
+        });
+        for (const p of players) {
+            if (p.playerId === scratchPlayer.playerId)
+                continue;
+            const total = totalFor(p.playerId);
+            if (total === 0)
+                continue;
+            lines.push({
+                prefix: '',
+                boldName: p.name,
+                suffix: ` gets ${total} stroke${total === 1 ? '' : 's'}: holes ${formatHoles(holesList(p.playerId))}.`,
+            });
+        }
+    }
+    return lines;
 }
 function getScoringUnits(players, format) {
     if (format === 'A') {

@@ -52,6 +52,9 @@ exports.getRyderOptions = getRyderOptions;
 exports.saveRyderOptions = saveRyderOptions;
 exports.getMatchPlayerTees = getMatchPlayerTees;
 exports.saveMatchPlayerTee = saveMatchPlayerTee;
+exports.getMatchLink = getMatchLink;
+exports.saveMatchLink = saveMatchLink;
+exports.unlinkMatch = unlinkMatch;
 exports.getMatchHoleScores = getMatchHoleScores;
 exports.saveMatchHoleScores = saveMatchHoleScores;
 exports.getMatchPairing = getMatchPairing;
@@ -1221,6 +1224,41 @@ async function saveMatchPlayerTee(year, groupId, matchId, playerId, ghinTeeSetId
     await config_1.default.query(`INSERT INTO RyderMatchPlayerTee (GroupID, RyderYear, MatchID, PlayerID, GhinTeeSetId, TeeName, CourseHandicap, LastUpdateUser)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE GhinTeeSetId = VALUES(GhinTeeSetId), TeeName = VALUES(TeeName), CourseHandicap = VALUES(CourseHandicap), LastUpdateUser = VALUES(LastUpdateUser)`, [groupId, year, matchId, playerId, ghinTeeSetId, teeName, courseHandicap, user]);
+}
+/**
+ * Pair two Singles matches that are being played as one physical foursome, so one scorer can
+ * run both from a tab switcher in rydermatch.tsx instead of needing a second person -- confirmed
+ * with Matt 2026-08-06: singles matches are commonly paired up two-to-a-group at tee time, and
+ * making everyone in a foursome carry their own phone was the exact friction this closes.
+ * Stored as one row per pair with MatchID1 < MatchID2 (canonical order) so a lookup from either
+ * side works with the same OR clause -- getMatchLink below always returns "the other one",
+ * regardless of which side of the pair you ask from.
+ */
+async function getMatchLink(year, groupId, matchId) {
+    const [rows] = await config_1.default.query(`SELECT MatchID1, MatchID2 FROM RyderMatchLink
+     WHERE RyderYear = ? AND GroupID = ? AND (MatchID1 = ? OR MatchID2 = ?)`, [year, groupId, matchId, matchId]);
+    if (rows.length === 0)
+        return null;
+    const { MatchID1, MatchID2 } = rows[0];
+    return MatchID1 === matchId ? MatchID2 : MatchID1;
+}
+/** Link two matches, replacing any existing link either one was already part of -- a match can
+ * only be paired with one other at a time (a foursome is exactly two singles matches), so
+ * re-linking is how a captain fixes picking the wrong match, same "always allow a correction"
+ * approach as Edit Tees. */
+async function saveMatchLink(year, groupId, matchId1, matchId2, user) {
+    const [lo, hi] = matchId1 < matchId2 ? [matchId1, matchId2] : [matchId2, matchId1];
+    await config_1.default.query(`DELETE FROM RyderMatchLink WHERE RyderYear = ? AND GroupID = ? AND (MatchID1 IN (?, ?) OR MatchID2 IN (?, ?))`, [year, groupId, matchId1, matchId2, matchId1, matchId2]);
+    await config_1.default.query(`INSERT INTO RyderMatchLink (RyderYear, GroupID, MatchID1, MatchID2, LastUpdateUser) VALUES (?, ?, ?, ?, ?)`, [year, groupId, lo, hi, user]);
+}
+/** Unlink a match from whichever other match it's currently paired with, if any. */
+async function unlinkMatch(year, groupId, matchId) {
+    await config_1.default.query(`DELETE FROM RyderMatchLink WHERE RyderYear = ? AND GroupID = ? AND (MatchID1 = ? OR MatchID2 = ?)`, [
+        year,
+        groupId,
+        matchId,
+        matchId,
+    ]);
 }
 /**
  * A hole's raw per-player gross scores when Keep Score is on -- separate from

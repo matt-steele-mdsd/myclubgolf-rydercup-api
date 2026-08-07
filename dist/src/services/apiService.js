@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.verifyCaptainPassword = exports.saveMatchHoleScores = exports.getMatchHoleScores = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
-exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = void 0;
+exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.verifyCaptainPassword = exports.saveMatchHoleScores = exports.getMatchHoleScores = exports.unlinkMatch = exports.saveMatchLink = exports.getMatchLink = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
+exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = void 0;
 exports.pickCurrentSession = pickCurrentSession;
 // Production API URL - always use this for built apps. To test a local backend change,
 // temporarily point this at http://localhost:3000/api and revert before committing (see
@@ -505,6 +505,55 @@ const saveMatchPlayerTee = async (year, groupId, matchId, playerId, ghinTeeSetId
     }
 };
 exports.saveMatchPlayerTee = saveMatchPlayerTee;
+/** Which other match (if any) this one is paired with as one physical foursome -- see
+ * ryderService.ts's getMatchLink. Null on a network failure too, same as "not linked", since
+ * there's nothing useful to do differently either way. */
+const getMatchLink = async (year, groupId, matchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/match-link?year=${year}&group=${groupId}&match=${matchId}`);
+        if (!response.ok)
+            return null;
+        const data = (await response.json());
+        return data.linkedMatchId;
+    }
+    catch (error) {
+        console.error('Error fetching match link:', error);
+        return null;
+    }
+};
+exports.getMatchLink = getMatchLink;
+/** Pair two Singles matches as one foursome -- replaces either match's existing link, if any. */
+const saveMatchLink = async (year, groupId, matchId, linkedMatchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/match-link`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId, matchId, linkedMatchId }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error saving match link:', error);
+        return false;
+    }
+};
+exports.saveMatchLink = saveMatchLink;
+/** Unpair a match from whichever other match it's currently linked with. */
+const unlinkMatch = async (year, groupId, matchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/match-link/unlink`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId, matchId }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error unlinking match:', error);
+        return false;
+    }
+};
+exports.unlinkMatch = unlinkMatch;
 /** Get every player's already-entered gross score for one hole (Keep Score mode) -- playerId ->
  * gross score. Empty object if nobody's entered anything for this hole yet. */
 const getMatchHoleScores = async (year, groupId, matchId, hole) => {

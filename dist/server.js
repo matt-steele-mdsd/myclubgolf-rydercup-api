@@ -533,6 +533,53 @@ app.post('/api/ryder/match-tees', async (req, res) => {
         res.status(500).json({ error: 'Failed to save match tee' });
     }
 });
+// Which other match (if any) this one is paired with as one foursome (Singles only)
+app.get('/api/ryder/match-link', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        const matchId = parseInt(req.query.match);
+        if (!year || !matchId) {
+            return res.status(400).json({ error: 'year and match query params are required' });
+        }
+        const linkedMatchId = await (0, ryderService_1.getMatchLink)(year, groupId, matchId);
+        res.json({ linkedMatchId });
+    }
+    catch (error) {
+        console.error('Error fetching match link:', error.message);
+        res.status(500).json({ error: 'Failed to fetch match link' });
+    }
+});
+// Pair two Singles matches as one foursome (replaces either match's existing link, if any)
+app.post('/api/ryder/match-link', async (req, res) => {
+    try {
+        const { year, group, matchId, linkedMatchId, user } = req.body;
+        if (!year || !matchId || !linkedMatchId) {
+            return res.status(400).json({ error: 'year, matchId, and linkedMatchId are required' });
+        }
+        await (0, ryderService_1.saveMatchLink)(year, group || 1, matchId, linkedMatchId, user || 'app');
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error saving match link:', error.message);
+        res.status(500).json({ error: 'Failed to save match link' });
+    }
+});
+// Unpair a match from whichever other match it's currently linked with
+app.post('/api/ryder/match-link/unlink', async (req, res) => {
+    try {
+        const { year, group, matchId } = req.body;
+        if (!year || !matchId) {
+            return res.status(400).json({ error: 'year and matchId are required' });
+        }
+        await (0, ryderService_1.unlinkMatch)(year, group || 1, matchId);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error unlinking match:', error.message);
+        res.status(500).json({ error: 'Failed to unlink match' });
+    }
+});
 // Get every player's already-entered gross score for one hole (Keep Score mode)
 app.get('/api/ryder/match-hole-scores', async (req, res) => {
     try {
