@@ -414,11 +414,10 @@ app.delete('/api/ryder/hdcp-freeze', async (req, res) => {
         res.status(500).json({ error: 'Failed to unfreeze handicaps' });
     }
 });
-// Verify a candidate Captains password for one group (Menu -> Captains gate). Checks that
-// group's own RyderOptions.CaptainPassword override if it has one, else falls back to the
-// shared app-wide CAPTAIN_PASSWORD env var default -- see verifyGroupCaptainPassword. Stateless:
-// the client remembers "verified today" locally (see src/utils/captainAuth.ts), this endpoint
-// just checks the candidate on each attempt.
+// Verify a candidate Captains password for one group (Menu -> Captains gate). Blank/never-set
+// counts as "no password required" -- see verifyGroupCaptainPassword. Stateless: the client
+// remembers "verified today" locally (see src/utils/captainAuth.ts), this endpoint just checks
+// the candidate on each attempt.
 app.post('/api/ryder/verify-captain-password', async (req, res) => {
     try {
         const { group, password } = req.body;
@@ -433,8 +432,10 @@ app.post('/api/ryder/verify-captain-password', async (req, res) => {
         res.status(500).json({ error: 'Failed to verify captain password' });
     }
 });
-// Master Tools only: whether a group has its own Captain password override on file
-app.get('/api/ryder/master/captain-password-status', async (req, res) => {
+// Whether a group actually has a Captain password set -- menu.tsx checks this before ever
+// showing the password prompt (blank means skip straight to setcaptainpassword.tsx instead).
+// Not master-only; every group's own Captains gate needs this, not just Master Tools.
+app.get('/api/ryder/captain-password-status', async (req, res) => {
     try {
         const groupId = parseInt(req.query.group);
         if (!groupId) {
@@ -447,7 +448,9 @@ app.get('/api/ryder/master/captain-password-status', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch captain password status' });
     }
 });
-// Master Tools only: set (or clear, with password null) any group's Captain password override
+// Set (or clear, with password null) a group's Captain password -- used both by Master Tools'
+// Change Group Password (any group) and setcaptainpassword.tsx (a group setting its own, right
+// after being told it's currently blank).
 app.post('/api/ryder/master/captain-password', async (req, res) => {
     try {
         const { group, password } = req.body;
@@ -494,6 +497,9 @@ app.delete('/api/ryder/master/groups/:groupId', async (req, res) => {
         res.json({ status: 'ok' });
     }
     catch (error) {
+        if (error instanceof ryderService_1.ProtectedGroupError) {
+            return res.status(403).json({ error: error.message });
+        }
         console.error('Error deleting group:', error.message);
         res.status(500).json({ error: 'Failed to delete group' });
     }

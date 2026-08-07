@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GHIN_SYNC_USER = void 0;
+exports.GHIN_SYNC_USER = exports.ProtectedGroupError = void 0;
 exports.getRyderYears = getRyderYears;
 exports.getRyderGroups = getRyderGroups;
 exports.searchRyderEvents = searchRyderEvents;
@@ -171,15 +171,21 @@ async function getAllGroupsSummary() {
         matches: matchesByGroup.get(g.GroupID) ?? 0,
     }));
 }
+/** Thrown by deleteGroup when the target is protected -- server.ts's route maps this to a 403
+ * rather than a generic 500, so the client can show the real reason instead of "failed". */
+class ProtectedGroupError extends Error {
+}
+exports.ProtectedGroupError = ProtectedGroupError;
 /**
  * Permanently delete a group and everything under it -- every year, every match, every player,
  * every setting. No undo. Manage Events is the only caller, and only after Matt confirms
- * (player/match counts shown right in the confirmation, mirroring Scorecard's manageeventS.tsx)
- * -- there is deliberately no protection against deleting any *specific* group baked in here
- * (e.g. the real event or the Apple-review test event); that's a judgment call for whoever's
- * running Manage Events, the same way Scorecard's equivalent has no hardcoded protected event
- * either. The only thing the UI itself blocks is deleting the group you're currently
- * authenticated through (see manageevents.tsx), same as Scorecard.
+ * (player/match counts shown right in the confirmation, mirroring Scorecard's manageevents.tsx).
+ * Unlike Scorecard's equivalent (which has no hardcoded protected event at all), "Test Event"
+ * is specifically protected here -- confirmed with Matt 2026-08-06: Apple App Review's testers
+ * use it, so it's never safe to delete regardless of who's running this screen or why. Every
+ * other group is still an unprotected judgment call, matching Scorecard's philosophy. The UI
+ * also separately blocks deleting the group you're currently authenticated through (see
+ * manageevents.tsx), same as Scorecard.
  *
  * RyderHdcp has no GroupID column (just Year+PlayerID) -- PlayerID is already unique per group
  * (each group's roster is a disjoint auto-increment range, confirmed 2026-08-06 investigating
@@ -187,6 +193,10 @@ async function getAllGroupsSummary() {
  * each group they're in), so its rows are found by first collecting this group's PlayerIDs.
  */
 async function deleteGroup(groupId) {
+    const event = await getRyderEventById(groupId);
+    if (event?.eventName === 'Test Event') {
+        throw new ProtectedGroupError('"Test Event" can\'t be deleted -- Apple App Review uses it to test the app.');
+    }
     const [playerRows] = await config_1.default.query('SELECT PlayerID FROM RyderPlayer WHERE GroupID = ?', [groupId]);
     const playerIds = playerRows.map((r) => r.PlayerID);
     if (playerIds.length > 0) {
@@ -1272,36 +1282,37 @@ async function saveRyderOptions(groupId, options) {
 /**
  * Per-group Captain password, stored in `RyderOptions.CaptainPassword` (plaintext, same
  * approach Scorecard's `EventOptions.admin_password` uses -- no hashing, straight string
- * compare). A group with no override on file falls back to the app-wide `CAPTAIN_PASSWORD`
- * env var, which is exactly what every group did before this existed -- confirmed with Matt
- * 2026-08-06, this has to be non-breaking for the real event a week out, so "never configured"
- * must keep working exactly as it did. Kept separate from `getRyderOptions`/`saveRyderOptions`
- * (which the Options screen freely round-trips) rather than folded into that interface, same
- * reasoning Scorecard's admin-password routes are separate from its general event-options
- * ones -- a password shouldn't ride along on every unrelated options save.
+ * compare). NULL/blank means no password is required at all -- that's the real default for
+ * every group now (confirmed with Matt 2026-08-06), not a fallback to some shared value.
+ * "Real Ryder Cup" (the actual 2026 event) is the one exception, with its password set
+ * explicitly so it keeps working exactly as it always has -- see the migration note on
+ * deploy. Kept separate from `getRyderOptions`/`saveRyderOptions` (which the Options screen
+ * freely round-trips) rather than folded into that interface, same reasoning Scorecard's
+ * admin-password routes are separate from its general event-options ones -- a password
+ * shouldn't ride along on every unrelated options save.
  */
 async function verifyGroupCaptainPassword(groupId, candidate) {
-    const [rows] = await config_1.default.query('SELECT CaptainPassword FROM RyderOptions WHERE GroupID = ?', [groupId]);
-    const override = rows[0]?.CaptainPassword ?? null;
-    if (override !== null)
-        return candidate === override;
-    const expected = process.env.CAPTAIN_PASSWORD;
-    if (!expected) {
-        console.error('CAPTAIN_PASSWORD env var is not set and no per-group override exists for GroupID', groupId);
-        return false;
-    }
-    return candidate === expected;
+    const stored = await getStoredCaptainPassword(groupId);
+    if (!stored)
+        return true; // blank -- no password required, anything "passes"
+    return candidate === stored;
 }
-/** Whether this group has its own password override on file, for the Change Group Password
- * screen's "currently: custom / using the shared default" status line -- doesn't reveal the
- * actual value. */
+/** Whether this group actually requires a password right now -- menu.tsx checks this before
+ * ever showing the password prompt, so a blank group skips straight past it (see
+ * setcaptainpassword.tsx) instead of asking for a password that doesn't exist. Also powers
+ * Change Group Password's "currently: custom / currently blank" status line -- doesn't reveal
+ * the actual value either way. */
 async function getGroupCaptainPasswordStatus(groupId) {
-    const [rows] = await config_1.default.query('SELECT CaptainPassword FROM RyderOptions WHERE GroupID = ?', [groupId]);
-    return { hasOverride: (rows[0]?.CaptainPassword ?? null) !== null };
+    return { hasPassword: !!(await getStoredCaptainPassword(groupId)) };
 }
-/** Set (or, with `password: null`, clear) this group's own password override -- clearing falls
- * back to the shared `CAPTAIN_PASSWORD` env var default, not to "no password required." Upserts
- * since a group may not have a `RyderOptions` row yet (e.g. Options has never been touched). */
+async function getStoredCaptainPassword(groupId) {
+    const [rows] = await config_1.default.query('SELECT CaptainPassword FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const stored = rows[0]?.CaptainPassword ?? null;
+    return stored && stored.length > 0 ? stored : null;
+}
+/** Set (or, with `password: null`, clear back to blank/no-password) this group's password.
+ * Upserts since a group may not have a `RyderOptions` row yet (e.g. Options has never been
+ * touched). */
 async function setGroupCaptainPassword(groupId, password) {
     await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, CaptainPassword)
      VALUES (?, 0, 0, 1, 60, 40, 0, ?)

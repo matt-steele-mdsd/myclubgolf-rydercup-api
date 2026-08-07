@@ -608,18 +608,19 @@ const verifyCaptainPassword = async (groupId, password) => {
     }
 };
 exports.verifyCaptainPassword = verifyCaptainPassword;
-/** Whether a group has its own Captain password override on file, vs. using the shared
- * app-wide default -- Change Group Password's status line. */
+/** Whether a group actually has a Captain password set right now -- blank is the real default
+ * for every group except Real Ryder Cup. Used both by menu.tsx (skip the password prompt
+ * entirely when blank) and Change Group Password's status line. */
 const getGroupCaptainPasswordStatus = async (groupId) => {
     try {
-        const response = await fetch(`${API_URL}/ryder/master/captain-password-status?group=${groupId}`);
+        const response = await fetch(`${API_URL}/ryder/captain-password-status?group=${groupId}`);
         if (!response.ok)
-            return { hasOverride: false };
+            return { hasPassword: false };
         return (await response.json());
     }
     catch (error) {
         console.error('Error fetching captain password status:', error);
-        return { hasOverride: false };
+        return { hasPassword: false };
     }
 };
 exports.getGroupCaptainPasswordStatus = getGroupCaptainPasswordStatus;
@@ -674,11 +675,15 @@ exports.getAllGroupsSummary = getAllGroupsSummary;
 const deleteRyderGroup = async (groupId) => {
     try {
         const response = await fetch(`${API_URL}/ryder/master/groups/${groupId}`, { method: 'DELETE' });
-        return response.ok;
+        if (!response.ok) {
+            const body = await response.json().catch(() => null);
+            return { ok: false, error: body?.error || 'Failed to delete the group. Please try again.' };
+        }
+        return { ok: true };
     }
     catch (error) {
         console.error('Error deleting group:', error);
-        return false;
+        return { ok: false, error: 'Failed to delete the group. Please try again.' };
     }
 };
 exports.deleteRyderGroup = deleteRyderGroup;
