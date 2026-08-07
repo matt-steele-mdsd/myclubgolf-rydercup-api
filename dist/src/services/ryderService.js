@@ -878,6 +878,27 @@ async function getSessionMatches(year, groupId, sessionId) {
     }));
 }
 /**
+ * Men's and Women's stroke-index ranking per hole, straight from the cached GHIN tee data
+ * (`CourseTeeSet`/`CourseTeeHole`) rather than `CourseDetails`' single gender-agnostic value --
+ * confirmed with real data 2026-08-06 that every tee of the same gender at a course shares one
+ * identical ranking (only rating/slope/yardage differ per tee), so it's safe to read from
+ * *any* tee of a given gender rather than needing the specific one a player picked. Missing
+ * entirely (empty Map) for a gender whose tee data was never cached -- callers fall back to
+ * `CourseDetails.OrigHdcp` in that case (see RyderMatchSetupHole.hdcp).
+ */
+async function getGenderedHoleRankings(courseId, holeNumbers) {
+    const [rows] = await config_1.default.query(`SELECT ts.Gender, h.HoleNum, h.Hdcp
+     FROM CourseTeeHole h
+     INNER JOIN CourseTeeSet ts ON ts.CourseTeeSetID = h.CourseTeeSetID
+     WHERE ts.CourseID = ? AND h.HoleNum IN (?)`, [courseId, holeNumbers]);
+    const male = new Map();
+    const female = new Map();
+    for (const r of rows) {
+        (r.Gender === 'Female' ? female : male).set(r.HoleNum, r.Hdcp);
+    }
+    return { male, female };
+}
+/**
  * Get everything needed to run the live hole-by-hole scorer for a match — mirrors
  * rydermatch.php's initial data load (roster, par/handicap per hole, any scores already
  * recorded so a match already underway resumes where it left off).
@@ -897,8 +918,10 @@ async function getMatchSetup(year, groupId, matchId) {
     const euroPlayers = matchRows.filter((r) => r.Team === 'E').map((r) => r.name).join(' & ');
     const holeNumbers = holeNumbersFor(holesSetting);
     const eventCourse = await getEventCourse(groupId, year);
-    const [courseRows] = await config_1.default.query('SELECT HoleNum, Par, OrigHdcp FROM CourseDetails WHERE CourseID = ? AND HoleNum IN (?)', [eventCourse?.courseId ?? 1, holeNumbers]);
+    const courseId = eventCourse?.courseId ?? 1;
+    const [courseRows] = await config_1.default.query('SELECT HoleNum, Par, OrigHdcp FROM CourseDetails WHERE CourseID = ? AND HoleNum IN (?)', [courseId, holeNumbers]);
     const courseByHole = new Map(courseRows.map((r) => [r.HoleNum, { par: r.Par, hdcp: r.OrigHdcp }]));
+    const genderedHdcps = await getGenderedHoleRankings(courseId, holeNumbers);
     const [scoreRows] = await config_1.default.query('SELECT HoleID, Result FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
     const resultByHole = new Map(scoreRows.map((r) => [r.HoleID, r.Result]));
     const winnerFor = (result) => {
@@ -912,7 +935,14 @@ async function getMatchSetup(year, groupId, matchId) {
     };
     const holes = holeNumbers.map((hole) => {
         const course = courseByHole.get(hole);
-        return { hole, par: course?.par ?? 0, hdcp: course?.hdcp ?? 0, result: winnerFor(resultByHole.get(hole)) };
+        return {
+            hole,
+            par: course?.par ?? 0,
+            hdcp: course?.hdcp ?? 0,
+            hdcpMale: genderedHdcps.male.get(hole) ?? null,
+            hdcpFemale: genderedHdcps.female.get(hole) ?? null,
+            result: winnerFor(resultByHole.get(hole)),
+        };
     });
     const displayNumbers = await getMatchDisplayNumbers(year, groupId);
     return { matchId, displayNumber: displayNumbers.get(matchId) ?? matchId, sessionId, usaPlayers, euroPlayers, holes };
@@ -1324,7 +1354,7 @@ async function setGroupCaptainPassword(groupId, password) {
  * tee-picker screen uses it to know who's left and which course to offer tees for.
  */
 async function getMatchPlayerTees(year, groupId, matchId) {
-    const [rows] = await config_1.default.query(`SELECT rm.PlayerID, rm.Team, rm.CourseID, c.CourseName, rs.Format,
+    const [rows] = await config_1.default.query(`SELECT rm.PlayerID, rm.Team, rm.CourseID, c.CourseName, rs.Format, rp.Gender,
             CONCAT(rp.FirstName, ' ', rp.LastName) AS name,
             t.GhinTeeSetId, t.TeeName, t.CourseHandicap
      FROM RyderMatch rm
@@ -1347,6 +1377,7 @@ async function getMatchPlayerTees(year, groupId, matchId) {
             ghinTeeSetId: r.GhinTeeSetId,
             teeName: r.TeeName,
             courseHandicap: r.CourseHandicap,
+            gender: r.Gender === 'F' ? 'F' : 'M',
         })),
     };
 }

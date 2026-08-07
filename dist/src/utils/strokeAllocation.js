@@ -39,7 +39,14 @@ function computeMatchStrokes(input) {
     const { players, format, holes, altShotLowPct, altShotHighPct, nineHoleHalfStrokes } = input;
     const isNineHole = holes.length === 9;
     const unitSize = isNineHole && nineHoleHalfStrokes ? 0.5 : 1;
-    const ranked = [...holes].sort((a, b) => a.hdcp - b.hdcp);
+    const hdcpFor = (h, gender) => (gender === 'M' ? h.hdcpMale : h.hdcpFemale) ?? h.hdcp;
+    // Two separate rankings, not one shared list -- Men's and Women's stroke-index order can
+    // genuinely differ hole-to-hole (confirmed with real GHIN data 2026-08-06), so each player's
+    // strokes land according to their own gender's card, not a single "the" ranking.
+    const rankedByGender = {
+        M: [...holes].sort((a, b) => hdcpFor(a, 'M') - hdcpFor(b, 'M')),
+        F: [...holes].sort((a, b) => hdcpFor(a, 'F') - hdcpFor(b, 'F')),
+    };
     const emptyAllocation = () => Object.fromEntries(holes.map((h) => [h.hole, 0]));
     // `units` counts steps of `unitSize` each -- e.g. a 3-stroke 18-hole-style difference in
     // half-stroke mode is 3 units of 0.5. `stepsPerHole` is how many units it takes to fill one
@@ -48,7 +55,8 @@ function computeMatchStrokes(input) {
     // hardest hole (its 2 units) then 0.5 on the next-hardest (its 1 remaining unit), not spread
     // as three separate 0.5s across three different holes.
     const stepsPerHole = Math.round(1 / unitSize);
-    const allocate = (units) => {
+    const allocate = (units, gender) => {
+        const ranked = rankedByGender[gender];
         const allocation = emptyAllocation();
         for (let i = 0; i < units; i++) {
             const holeIndex = Math.floor(i / stepsPerHole) % ranked.length;
@@ -71,25 +79,30 @@ function computeMatchStrokes(input) {
             const highCH = Math.max(...chs);
             return (altShotLowPct / 100) * lowCH + (altShotHighPct / 100) * highCH;
         };
+        // The shared team ball needs one ranking, not one per partner -- uses whichever partner's
+        // Course Handicap is lower, same partner whose share of the blend is the bigger one
+        // (altShotLowPct). Moot for the overwhelmingly common same-gender team.
+        const genderOf = (team) => team.reduce((low, p) => (p.courseHandicap < low.courseHandicap ? p : low)).gender;
         // The percentage blend can land on a fraction (e.g. 60% of 11 + 40% of 24 = 16.2) even
         // before any nine-hole adjustment -- round to a whole Course Handicap first, same as a real
         // player's would be, then apply the same nine-hole rule everything else uses.
         const uEff = effectiveCourseHandicap(Math.round(teamRawCH(teamU)), isNineHole, nineHoleHalfStrokes);
         const eEff = effectiveCourseHandicap(Math.round(teamRawCH(teamE)), isNineHole, nineHoleHalfStrokes);
         const minEff = Math.min(uEff, eEff);
-        const uAllocation = allocate(uEff - minEff);
-        const eAllocation = allocate(eEff - minEff);
+        const uAllocation = allocate(uEff - minEff, genderOf(teamU));
+        const eAllocation = allocate(eEff - minEff, genderOf(teamE));
         for (const p of teamU)
             result.set(p.playerId, uAllocation);
         for (const p of teamE)
             result.set(p.playerId, eAllocation);
         return result;
     }
-    // Better Ball ('B') and Singles (null): everyone plays off the match's lowest handicap.
+    // Better Ball ('B') and Singles (null): everyone plays off the match's lowest handicap, but
+    // each player's own strokes still land according to their own gender's stroke-index order.
     const withEff = players.map((p) => ({ ...p, eff: effectiveCourseHandicap(p.courseHandicap, isNineHole, nineHoleHalfStrokes) }));
     const minEff = Math.min(...withEff.map((p) => p.eff));
     for (const p of withEff) {
-        result.set(p.playerId, allocate(p.eff - minEff));
+        result.set(p.playerId, allocate(p.eff - minEff, p.gender));
     }
     return result;
 }
