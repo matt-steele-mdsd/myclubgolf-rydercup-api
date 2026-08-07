@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.verifyCaptainPassword = exports.saveMatchHoleScores = exports.getMatchHoleScores = exports.unlinkMatch = exports.saveMatchLink = exports.getMatchLink = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
-exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = void 0;
+exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.deleteRyderGroup = exports.getAllGroupsSummary = exports.searchAllGroupsForMaster = exports.setGroupCaptainPassword = exports.getGroupCaptainPasswordStatus = exports.verifyCaptainPassword = exports.saveMatchHoleScores = exports.getMatchHoleScores = exports.unlinkMatch = exports.saveMatchLink = exports.getMatchLink = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
+exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = void 0;
 exports.pickCurrentSession = pickCurrentSession;
 // Production API URL - always use this for built apps. To test a local backend change,
 // temporarily point this at http://localhost:3000/api and revert before committing (see
@@ -586,15 +586,16 @@ const saveMatchHoleScores = async (year, groupId, matchId, hole, scores) => {
 };
 exports.saveMatchHoleScores = saveMatchHoleScores;
 /**
- * Verify a candidate Captains password (Menu -> Captains gate). One shared password for the
- * whole app -- see server.ts's verify-captain-password route.
+ * Verify a candidate Captains password for one group (Menu -> Captains gate). Checks that
+ * group's own password override if it has one, else falls back to the shared app-wide default
+ * -- see ryderService.ts's verifyGroupCaptainPassword.
  */
-const verifyCaptainPassword = async (password) => {
+const verifyCaptainPassword = async (groupId, password) => {
     try {
         const response = await fetch(`${API_URL}/ryder/verify-captain-password`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password }),
+            body: JSON.stringify({ group: groupId, password }),
         });
         if (!response.ok)
             return false;
@@ -607,6 +608,80 @@ const verifyCaptainPassword = async (password) => {
     }
 };
 exports.verifyCaptainPassword = verifyCaptainPassword;
+/** Whether a group has its own Captain password override on file, vs. using the shared
+ * app-wide default -- Change Group Password's status line. */
+const getGroupCaptainPasswordStatus = async (groupId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/master/captain-password-status?group=${groupId}`);
+        if (!response.ok)
+            return { hasOverride: false };
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching captain password status:', error);
+        return { hasOverride: false };
+    }
+};
+exports.getGroupCaptainPasswordStatus = getGroupCaptainPasswordStatus;
+/** Set (or, passing null, clear) a group's own Captain password override -- Master Tools only,
+ * works for any group regardless of whether its current password is known. Clearing falls back
+ * to the shared app-wide default, not to "no password required." */
+const setGroupCaptainPassword = async (groupId, password) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/master/captain-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ group: groupId, password }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error setting captain password:', error);
+        return false;
+    }
+};
+exports.setGroupCaptainPassword = setGroupCaptainPassword;
+/** Every group in the system, unrestricted (including hidden ones) -- Master Tools' event
+ * pickers (Change Group Password, Manage Events) need to reach every group. */
+const searchAllGroupsForMaster = async (query) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/master/groups?q=${encodeURIComponent(query)}`);
+        if (!response.ok)
+            return [];
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error searching all groups:', error);
+        return [];
+    }
+};
+exports.searchAllGroupsForMaster = searchAllGroupsForMaster;
+/** Every group with a lifetime player/match count, for Manage Events. */
+const getAllGroupsSummary = async () => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/master/groups-summary`);
+        if (!response.ok)
+            return [];
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching groups summary:', error);
+        return [];
+    }
+};
+exports.getAllGroupsSummary = getAllGroupsSummary;
+/** Permanently delete a group and everything under it. No undo. */
+const deleteRyderGroup = async (groupId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/master/groups/${groupId}`, { method: 'DELETE' });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error deleting group:', error);
+        return false;
+    }
+};
+exports.deleteRyderGroup = deleteRyderGroup;
 /**
  * Get a match's current course/player pairing via the API server.
  */

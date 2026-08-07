@@ -8,6 +8,9 @@ exports.getRyderYears = getRyderYears;
 exports.getRyderGroups = getRyderGroups;
 exports.searchRyderEvents = searchRyderEvents;
 exports.getRyderEventById = getRyderEventById;
+exports.searchAllGroupsForMaster = searchAllGroupsForMaster;
+exports.getAllGroupsSummary = getAllGroupsSummary;
+exports.deleteGroup = deleteGroup;
 exports.createRyderEvent = createRyderEvent;
 exports.renameRyderEvent = renameRyderEvent;
 exports.getCourseList = getCourseList;
@@ -50,6 +53,9 @@ exports.freezeHandicaps = freezeHandicaps;
 exports.unfreezeHandicaps = unfreezeHandicaps;
 exports.getRyderOptions = getRyderOptions;
 exports.saveRyderOptions = saveRyderOptions;
+exports.verifyGroupCaptainPassword = verifyGroupCaptainPassword;
+exports.getGroupCaptainPasswordStatus = getGroupCaptainPasswordStatus;
+exports.setGroupCaptainPassword = setGroupCaptainPassword;
 exports.getMatchPlayerTees = getMatchPlayerTees;
 exports.saveMatchPlayerTee = saveMatchPlayerTee;
 exports.getMatchLink = getMatchLink;
@@ -98,6 +104,11 @@ async function getRyderGroups() {
  * an event's course isn't fixed — it can change year to year (see RyderCourse) — so the
  * "course" match here is against whichever course the event's most recent year used, just
  * for search/display purposes; it's not stored on the event itself.
+ *
+ * Excludes `Hidden` groups (the master/Captain-Tools group -- see mastertools.tsx) unless the
+ * query is an exact, case-insensitive match on the event's own name, same convention
+ * Scorecard's `hidden_from_search` uses: a hidden group never shows up browsing/partial-typing,
+ * but is still reachable if you know its exact name to type in full.
  */
 async function searchRyderEvents(query) {
     const trimmed = query.trim();
@@ -110,23 +121,96 @@ async function searchRyderEvents(query) {
       WHERE rc1.RyderYear = (SELECT MAX(rc2.RyderYear) FROM RyderCourse rc2 WHERE rc2.GroupID = rc1.GroupID)
     ) latest ON latest.GroupID = re.GroupID
     LEFT JOIN Course c ON c.CourseID = latest.CourseID
-    ${trimmed ? 'WHERE re.EventName LIKE ? OR c.CourseName LIKE ?' : ''}
+    WHERE (re.Hidden = 0 OR LOWER(re.EventName) = LOWER(?))
+    ${trimmed ? 'AND (re.EventName LIKE ? OR c.CourseName LIKE ?)' : ''}
     ORDER BY re.EventName
   `;
-    const params = trimmed ? [`%${trimmed}%`, `%${trimmed}%`] : [];
+    const params = trimmed ? [trimmed, `%${trimmed}%`, `%${trimmed}%`] : [trimmed];
     const [rows] = await config_1.default.query(sql, params);
     return rows.map((r) => ({ groupId: r.GroupID, eventName: r.EventName, courseName: r.CourseName ?? null }));
 }
 /**
  * Get a single Ryder Cup event by GroupID — used to show the fixed, read-only event name at
  * the top of every screen once one has been selected. Course isn't included here since it's
- * per-year, not per-event — see getEventCourse.
+ * per-year, not per-event — see getEventCourse. `hidden` lets menu.tsx know to treat this
+ * group's Captains gate as the Master Tools entry point instead of the normal Captains menu.
  */
 async function getRyderEventById(groupId) {
-    const [rows] = await config_1.default.query('SELECT GroupID, EventName FROM RyderEvents WHERE GroupID = ?', [groupId]);
+    const [rows] = await config_1.default.query('SELECT GroupID, EventName, Hidden FROM RyderEvents WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return null;
-    return { groupId: rows[0].GroupID, eventName: rows[0].EventName };
+    return { groupId: rows[0].GroupID, eventName: rows[0].EventName, hidden: !!rows[0].Hidden };
+}
+/** Every group in the system, unrestricted (including Hidden ones) -- the Change Group
+ * Password / Manage Events pickers need to reach every group, not just the normal
+ * search-visible ones. Same shape as searchRyderEvents's rows, minus the course-name join
+ * (not needed for a plain picker list). */
+async function searchAllGroupsForMaster(query) {
+    const trimmed = query.trim();
+    const [rows] = await config_1.default.query(`SELECT GroupID, EventName, Hidden FROM RyderEvents ${trimmed ? 'WHERE EventName LIKE ?' : ''} ORDER BY EventName`, trimmed ? [`%${trimmed}%`] : []);
+    return rows.map((r) => ({ groupId: r.GroupID, eventName: r.EventName, hidden: !!r.Hidden }));
+}
+/** Every group with a lifetime player/match count (across every year, not just one) -- Manage
+ * Events' list. Two separate GROUP BY queries rather than one join, same reasoning
+ * getRyderLeaderboard's multi-query approach already uses elsewhere in this file: joining
+ * RyderPlayer x RyderMatch directly would multiply rows and need a COUNT(DISTINCT ...) per
+ * side anyway, so it's simpler (and no slower) as two flat aggregates merged in JS. */
+async function getAllGroupsSummary() {
+    const [groups, playerCounts, matchCounts] = await Promise.all([
+        config_1.default.query('SELECT GroupID, EventName, Hidden FROM RyderEvents ORDER BY EventName').then(([rows]) => rows),
+        config_1.default.query('SELECT GroupID, COUNT(*) AS c FROM RyderPlayer GROUP BY GroupID').then(([rows]) => rows),
+        config_1.default.query('SELECT GroupID, COUNT(DISTINCT MatchID) AS c FROM RyderMatch GROUP BY GroupID').then(([rows]) => rows),
+    ]);
+    const playersByGroup = new Map(playerCounts.map((r) => [r.GroupID, r.c]));
+    const matchesByGroup = new Map(matchCounts.map((r) => [r.GroupID, r.c]));
+    return groups.map((g) => ({
+        groupId: g.GroupID,
+        eventName: g.EventName,
+        hidden: !!g.Hidden,
+        players: playersByGroup.get(g.GroupID) ?? 0,
+        matches: matchesByGroup.get(g.GroupID) ?? 0,
+    }));
+}
+/**
+ * Permanently delete a group and everything under it -- every year, every match, every player,
+ * every setting. No undo. Manage Events is the only caller, and only after Matt confirms
+ * (player/match counts shown right in the confirmation, mirroring Scorecard's manageeventS.tsx)
+ * -- there is deliberately no protection against deleting any *specific* group baked in here
+ * (e.g. the real event or the Apple-review test event); that's a judgment call for whoever's
+ * running Manage Events, the same way Scorecard's equivalent has no hardcoded protected event
+ * either. The only thing the UI itself blocks is deleting the group you're currently
+ * authenticated through (see manageevents.tsx), same as Scorecard.
+ *
+ * RyderHdcp has no GroupID column (just Year+PlayerID) -- PlayerID is already unique per group
+ * (each group's roster is a disjoint auto-increment range, confirmed 2026-08-06 investigating
+ * the Course Handicap gender bug: the same real person shows up as a *different* PlayerID in
+ * each group they're in), so its rows are found by first collecting this group's PlayerIDs.
+ */
+async function deleteGroup(groupId) {
+    const [playerRows] = await config_1.default.query('SELECT PlayerID FROM RyderPlayer WHERE GroupID = ?', [groupId]);
+    const playerIds = playerRows.map((r) => r.PlayerID);
+    if (playerIds.length > 0) {
+        await config_1.default.query('DELETE FROM RyderHdcp WHERE PlayerID IN (?)', [playerIds]);
+    }
+    const groupScopedTables = [
+        'RyderMatchPlayerScore',
+        'RyderMatchPlayerTee',
+        'RyderMatchLink',
+        'RyderMatchOpen',
+        'RyderMatchResults',
+        'RyderMatchScore',
+        'RyderMatch',
+        'RyderSession',
+        'RyderCourse',
+        'RyderHandicapFreeze',
+        'RyderRoster',
+        'RyderPlayer',
+        'RyderOptions',
+    ];
+    for (const table of groupScopedTables) {
+        await config_1.default.query(`DELETE FROM ${table} WHERE GroupID = ?`, [groupId]);
+    }
+    await config_1.default.query('DELETE FROM RyderEvents WHERE GroupID = ?', [groupId]);
 }
 /** Whether an event name is already in use by another event (case-insensitive, trimmed).
  * excludeGroupId is omitted when creating a brand-new event (nothing to exclude yet). */
@@ -1184,6 +1268,44 @@ async function saveRyderOptions(groupId, options) {
         options.altShotHighPct,
         options.nineHoleHalfStrokes ? 1 : 0,
     ]);
+}
+/**
+ * Per-group Captain password, stored in `RyderOptions.CaptainPassword` (plaintext, same
+ * approach Scorecard's `EventOptions.admin_password` uses -- no hashing, straight string
+ * compare). A group with no override on file falls back to the app-wide `CAPTAIN_PASSWORD`
+ * env var, which is exactly what every group did before this existed -- confirmed with Matt
+ * 2026-08-06, this has to be non-breaking for the real event a week out, so "never configured"
+ * must keep working exactly as it did. Kept separate from `getRyderOptions`/`saveRyderOptions`
+ * (which the Options screen freely round-trips) rather than folded into that interface, same
+ * reasoning Scorecard's admin-password routes are separate from its general event-options
+ * ones -- a password shouldn't ride along on every unrelated options save.
+ */
+async function verifyGroupCaptainPassword(groupId, candidate) {
+    const [rows] = await config_1.default.query('SELECT CaptainPassword FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const override = rows[0]?.CaptainPassword ?? null;
+    if (override !== null)
+        return candidate === override;
+    const expected = process.env.CAPTAIN_PASSWORD;
+    if (!expected) {
+        console.error('CAPTAIN_PASSWORD env var is not set and no per-group override exists for GroupID', groupId);
+        return false;
+    }
+    return candidate === expected;
+}
+/** Whether this group has its own password override on file, for the Change Group Password
+ * screen's "currently: custom / using the shared default" status line -- doesn't reveal the
+ * actual value. */
+async function getGroupCaptainPasswordStatus(groupId) {
+    const [rows] = await config_1.default.query('SELECT CaptainPassword FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    return { hasOverride: (rows[0]?.CaptainPassword ?? null) !== null };
+}
+/** Set (or, with `password: null`, clear) this group's own password override -- clearing falls
+ * back to the shared `CAPTAIN_PASSWORD` env var default, not to "no password required." Upserts
+ * since a group may not have a `RyderOptions` row yet (e.g. Options has never been touched). */
+async function setGroupCaptainPassword(groupId, password) {
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, CaptainPassword)
+     VALUES (?, 0, 0, 1, 60, 40, 0, ?)
+     ON DUPLICATE KEY UPDATE CaptainPassword = VALUES(CaptainPassword)`, [groupId, password]);
 }
 /**
  * A match's course/format plus every player's teebox pick so far (see RyderMatchTeesInfo) -- the

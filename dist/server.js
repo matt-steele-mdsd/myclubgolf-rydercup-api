@@ -414,19 +414,89 @@ app.delete('/api/ryder/hdcp-freeze', async (req, res) => {
         res.status(500).json({ error: 'Failed to unfreeze handicaps' });
     }
 });
-// Verify a candidate Captains password (Menu -> Captains gate). One shared password for the
-// whole app (CAPTAIN_PASSWORD env var), not per-event like Scorecard's Admin password --
-// RyderCup only ever has captains for the one active event at a time. Stateless: the client
-// remembers "verified today" locally (see src/utils/captainAuth.ts), this endpoint just checks
-// the candidate against the env var on each attempt.
-app.post('/api/ryder/verify-captain-password', (req, res) => {
-    const { password } = req.body;
-    const expected = process.env.CAPTAIN_PASSWORD;
-    if (!expected) {
-        console.error('CAPTAIN_PASSWORD env var is not set');
-        return res.status(500).json({ error: 'Captain password not configured' });
+// Verify a candidate Captains password for one group (Menu -> Captains gate). Checks that
+// group's own RyderOptions.CaptainPassword override if it has one, else falls back to the
+// shared app-wide CAPTAIN_PASSWORD env var default -- see verifyGroupCaptainPassword. Stateless:
+// the client remembers "verified today" locally (see src/utils/captainAuth.ts), this endpoint
+// just checks the candidate on each attempt.
+app.post('/api/ryder/verify-captain-password', async (req, res) => {
+    try {
+        const { group, password } = req.body;
+        if (!group) {
+            return res.status(400).json({ error: 'group is required' });
+        }
+        const valid = await (0, ryderService_1.verifyGroupCaptainPassword)(group, password);
+        res.json({ valid });
     }
-    res.json({ valid: password === expected });
+    catch (error) {
+        console.error('Error verifying captain password:', error.message);
+        res.status(500).json({ error: 'Failed to verify captain password' });
+    }
+});
+// Master Tools only: whether a group has its own Captain password override on file
+app.get('/api/ryder/master/captain-password-status', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group);
+        if (!groupId) {
+            return res.status(400).json({ error: 'group query param is required' });
+        }
+        res.json(await (0, ryderService_1.getGroupCaptainPasswordStatus)(groupId));
+    }
+    catch (error) {
+        console.error('Error fetching captain password status:', error.message);
+        res.status(500).json({ error: 'Failed to fetch captain password status' });
+    }
+});
+// Master Tools only: set (or clear, with password null) any group's Captain password override
+app.post('/api/ryder/master/captain-password', async (req, res) => {
+    try {
+        const { group, password } = req.body;
+        if (!group) {
+            return res.status(400).json({ error: 'group is required' });
+        }
+        await (0, ryderService_1.setGroupCaptainPassword)(group, password === null || password === '' ? null : String(password));
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error setting captain password:', error.message);
+        res.status(500).json({ error: 'Failed to set captain password' });
+    }
+});
+// Master Tools only: every group in the system, unrestricted (including hidden ones)
+app.get('/api/ryder/master/groups', async (req, res) => {
+    try {
+        const query = req.query.q || '';
+        res.json(await (0, ryderService_1.searchAllGroupsForMaster)(query));
+    }
+    catch (error) {
+        console.error('Error searching all groups:', error.message);
+        res.status(500).json({ error: 'Failed to search all groups' });
+    }
+});
+// Master Tools only: every group with a lifetime player/match count (Manage Events' list)
+app.get('/api/ryder/master/groups-summary', async (_req, res) => {
+    try {
+        res.json(await (0, ryderService_1.getAllGroupsSummary)());
+    }
+    catch (error) {
+        console.error('Error fetching groups summary:', error.message);
+        res.status(500).json({ error: 'Failed to fetch groups summary' });
+    }
+});
+// Master Tools only: permanently delete a group and everything under it. No undo.
+app.delete('/api/ryder/master/groups/:groupId', async (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId);
+        if (!groupId) {
+            return res.status(400).json({ error: 'A valid groupId is required' });
+        }
+        await (0, ryderService_1.deleteGroup)(groupId);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error deleting group:', error.message);
+        res.status(500).json({ error: 'Failed to delete group' });
+    }
 });
 // Get this event's Captain options (Captains -> Options) -- scoped per GroupID, not per year
 app.get('/api/ryder/options', async (req, res) => {
