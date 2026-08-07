@@ -694,7 +694,7 @@ app.post('/api/ryder/finalize-match', async (req, res) => {
 // Add a new player to the roster (Admin -> Add Players)
 app.post('/api/ryder/players', async (req, res) => {
     try {
-        const { group, year, firstName, lastName, team, state, email, phone } = req.body;
+        const { group, year, firstName, lastName, team, state, email, phone, gender } = req.body;
         if (!year || !firstName || !lastName || (team !== 'U' && team !== 'E')) {
             return res.status(400).json({ error: 'year, firstName, lastName, and team (U or E) are required' });
         }
@@ -702,6 +702,7 @@ app.post('/api/ryder/players', async (req, res) => {
             state: state ? String(state).trim().toUpperCase() : null,
             email: email ? String(email).trim() : null,
             phone: phone ? String(phone).trim() : null,
+            gender: gender === 'F' ? 'F' : 'M',
         });
         if (!result.ok) {
             return res.status(409).json({ error: result.error });
@@ -749,7 +750,7 @@ app.get('/api/ryder/player-roster', async (req, res) => {
 app.patch('/api/ryder/players/:id', async (req, res) => {
     try {
         const playerId = parseInt(req.params.id);
-        const { group, firstName, lastName, state, email, phone } = req.body;
+        const { group, firstName, lastName, state, email, phone, gender } = req.body;
         if (!firstName?.trim() || !lastName?.trim()) {
             return res.status(400).json({ error: 'firstName and lastName are required' });
         }
@@ -757,6 +758,7 @@ app.patch('/api/ryder/players/:id', async (req, res) => {
             state: state ? String(state).trim().toUpperCase() : null,
             email: email ? String(email).trim() : null,
             phone: phone ? String(phone).trim() : null,
+            gender: gender === 'F' ? 'F' : 'M',
         });
         res.json({ status: 'ok' });
     }

@@ -914,8 +914,8 @@ async function addPlayer(groupId, year, firstName, lastName, team, contact) {
     if (existing.length > 0) {
         return { ok: false, error: 'Player already exists, please modify existing player.' };
     }
-    const [result] = await config_1.default.query(`INSERT INTO RyderPlayer (GroupID, FirstName, LastName, Team, State, Email, Phone, Active, LastUpdateUser)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'Y', ?)`, [groupId, trimmedFirst, trimmedLast, team, contact.state, contact.email, contact.phone, SCORER_NAME]);
+    const [result] = await config_1.default.query(`INSERT INTO RyderPlayer (GroupID, FirstName, LastName, Team, State, Email, Phone, Gender, Active, LastUpdateUser)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Y', ?)`, [groupId, trimmedFirst, trimmedLast, team, contact.state, contact.email, contact.phone, contact.gender, SCORER_NAME]);
     const playerId = result.insertId;
     await config_1.default.query(`INSERT INTO RyderRoster (GroupID, RyderYear, PlayerID, Team, LastUpdateUser) VALUES (?, ?, ?, ?, ?)`, [
         groupId,
@@ -980,7 +980,7 @@ async function seedRosterFromPreviousYearIfEmpty(groupId, year) {
  */
 async function getPlayerRoster(year, groupId) {
     await seedRosterFromPreviousYearIfEmpty(groupId, year);
-    const [playerRows] = await config_1.default.query(`SELECT p.PlayerID, p.FirstName, p.LastName, p.Retired, p.State, p.Email, p.Phone, p.Team AS DefaultTeam, ro.Team AS RosterTeam
+    const [playerRows] = await config_1.default.query(`SELECT p.PlayerID, p.FirstName, p.LastName, p.Retired, p.State, p.Email, p.Phone, p.Gender, p.Team AS DefaultTeam, ro.Team AS RosterTeam
      FROM RyderPlayer p
      LEFT JOIN RyderRoster ro ON ro.PlayerID = p.PlayerID AND ro.GroupID = p.GroupID AND ro.RyderYear = ?
      WHERE p.GroupID = ?
@@ -999,6 +999,7 @@ async function getPlayerRoster(year, groupId) {
             state: r.State,
             email: r.Email,
             phone: r.Phone,
+            gender: r.Gender === 'F' ? 'F' : 'M',
         };
     }));
     return {
@@ -1031,8 +1032,8 @@ async function setRosterMembership(groupId, year, playerId, onRoster, team) {
  * fixed so this is a safe in-place update, not a new row.
  */
 async function updatePlayerDetails(groupId, playerId, firstName, lastName, contact) {
-    await config_1.default.query(`UPDATE RyderPlayer SET FirstName = ?, LastName = ?, State = ?, Email = ?, Phone = ?, LastUpdateUser = ?
-     WHERE PlayerID = ? AND GroupID = ?`, [firstName, lastName, contact.state, contact.email, contact.phone, SCORER_NAME, playerId, groupId]);
+    await config_1.default.query(`UPDATE RyderPlayer SET FirstName = ?, LastName = ?, State = ?, Email = ?, Phone = ?, Gender = ?, LastUpdateUser = ?
+     WHERE PlayerID = ? AND GroupID = ?`, [firstName, lastName, contact.state, contact.email, contact.phone, contact.gender, SCORER_NAME, playerId, groupId]);
 }
 /**
  * Mark a player as permanently retired (left the club, kicked out, deceased) or restore them —

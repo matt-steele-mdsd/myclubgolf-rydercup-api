@@ -580,13 +580,27 @@ async function getCachedCourseTeeSets(courseId) {
  * on the player row, RyderCup already has that caching layer in RyderHdcp. Returns null if the
  * player has no index on file, or this course has no known GHIN course id (never linked via
  * GHIN search) and no cached tee sets either.
+ *
+ * Filters tee sets to the player's own Gender (same 'M'/'F' -> 'Male'/'Female' mapping as
+ * Scorecard's getPlayerCourseHandicaps) -- GHIN's CRDB reuses the same tee name for both genders
+ * at a different rating/slope (e.g. two separate "Blue" entries), and without this filter both
+ * showed up as separate, identically-labeled options. Confirmed as a real bug 2026-08-06: Matt
+ * caught a player's Blue Course Handicap coming back as 10 instead of 4 -- the unfiltered list
+ * was sorted highest-first (see below), so the *other* gender's much-higher-rated "Blue" sorted
+ * to the top and got tapped by mistake, both rows just saying "Blue" with no way to tell them
+ * apart. `RyderPlayer.Gender` is new (defaults 'M' for the whole existing roster, same default
+ * Scorecard's `Player.Gender` uses) -- there's no UI to set it yet, so a female player currently
+ * needs it corrected directly in the database until one exists.
  */
 async function getPlayerCourseHandicaps(playerId, courseId) {
-    const [hdcpRows] = await config_1.default.query(`SELECT COALESCE(HdcpIndex, Hdcp) AS index_value FROM RyderHdcp
-     WHERE PlayerID = ? AND Year = (SELECT MAX(Year) FROM RyderHdcp WHERE PlayerID = ?)`, [playerId, playerId]);
-    const index = hdcpRows[0]?.index_value != null ? Number(hdcpRows[0].index_value) : null;
+    const [playerRows] = await config_1.default.query(`SELECT COALESCE(h.HdcpIndex, h.Hdcp) AS index_value, p.Gender
+     FROM RyderPlayer p
+     LEFT JOIN RyderHdcp h ON h.PlayerID = p.PlayerID AND h.Year = (SELECT MAX(Year) FROM RyderHdcp WHERE PlayerID = p.PlayerID)
+     WHERE p.PlayerID = ?`, [playerId]);
+    const index = playerRows[0]?.index_value != null ? Number(playerRows[0].index_value) : null;
     if (index === null)
         return null;
+    const genderName = playerRows[0].Gender === 'F' ? 'Female' : 'Male';
     let teeSets = await getCachedCourseTeeSets(courseId);
     if (teeSets === null) {
         const [courseRows] = await config_1.default.query('SELECT GHINCourseId FROM Course WHERE CourseID = ?', [courseId]);
@@ -599,7 +613,7 @@ async function getPlayerCourseHandicaps(playerId, courseId) {
             saveCourseTeeSets(courseId, teeSets).catch((e) => console.error('Failed to cache course tee sets:', e.message));
         }
     }
-    const withRatings = teeSets.filter((ts) => ts.courseRating !== null && ts.slopeRating !== null);
+    const withRatings = teeSets.filter((ts) => ts.gender === genderName && ts.courseRating !== null && ts.slopeRating !== null);
     const options = withRatings.map((ts) => ({
         teeSetId: ts.teeSetId,
         teeName: ts.teeName,
