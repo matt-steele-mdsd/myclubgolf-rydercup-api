@@ -448,6 +448,21 @@ app.get('/api/ryder/captain-password-status', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch captain password status' });
     }
 });
+// Master Tools only: the actual Captain password value (not just whether one is set), so a
+// master user can remind a captain who forgot it without resetting it.
+app.get('/api/ryder/master/captain-password', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group);
+        if (!groupId) {
+            return res.status(400).json({ error: 'group query param is required' });
+        }
+        res.json(await (0, ryderService_1.getGroupCaptainPasswordValue)(groupId));
+    }
+    catch (error) {
+        console.error('Error fetching captain password value:', error.message);
+        res.status(500).json({ error: 'Failed to fetch captain password value' });
+    }
+});
 // Set (or clear, with password null) a group's Captain password -- used both by Master Tools'
 // Change Group Password (any group) and setcaptainpassword.tsx (a group setting its own, right
 // after being told it's currently blank).

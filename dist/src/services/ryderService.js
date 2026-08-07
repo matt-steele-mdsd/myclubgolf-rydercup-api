@@ -55,6 +55,7 @@ exports.getRyderOptions = getRyderOptions;
 exports.saveRyderOptions = saveRyderOptions;
 exports.verifyGroupCaptainPassword = verifyGroupCaptainPassword;
 exports.getGroupCaptainPasswordStatus = getGroupCaptainPasswordStatus;
+exports.getGroupCaptainPasswordValue = getGroupCaptainPasswordValue;
 exports.setGroupCaptainPassword = setGroupCaptainPassword;
 exports.getMatchPlayerTees = getMatchPlayerTees;
 exports.saveMatchPlayerTee = saveMatchPlayerTee;
@@ -1334,6 +1335,13 @@ async function verifyGroupCaptainPassword(groupId, candidate) {
  * the actual value either way. */
 async function getGroupCaptainPasswordStatus(groupId) {
     return { hasPassword: !!(await getStoredCaptainPassword(groupId)) };
+}
+/** Master Tools only -- reveals a group's actual Captain password, not just whether one is
+ * set, so a master user can remind a captain who forgot it without having to reset (and thus
+ * change) it. Never exposed through `getGroupCaptainPasswordStatus`, which every group's own
+ * Captains gate uses and must not leak the value through. */
+async function getGroupCaptainPasswordValue(groupId) {
+    return { password: await getStoredCaptainPassword(groupId) };
 }
 async function getStoredCaptainPassword(groupId) {
     const [rows] = await config_1.default.query('SELECT CaptainPassword FROM RyderOptions WHERE GroupID = ?', [groupId]);
