@@ -952,7 +952,16 @@ async function getMatchSetup(year, groupId, matchId) {
         };
     });
     const displayNumbers = await getMatchDisplayNumbers(year, groupId);
-    return { matchId, displayNumber: displayNumbers.get(matchId) ?? matchId, sessionId, usaPlayers, euroPlayers, holes };
+    const [resultRows] = await config_1.default.query('SELECT 1 FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND MatchID = ? LIMIT 1', [year, groupId, matchId]);
+    return {
+        matchId,
+        displayNumber: displayNumbers.get(matchId) ?? matchId,
+        sessionId,
+        usaPlayers,
+        euroPlayers,
+        holes,
+        completed: resultRows.length > 0,
+    };
 }
 /**
  * Mark a match as "someone has the scorer screen open right now" (Start Match tapped, before
