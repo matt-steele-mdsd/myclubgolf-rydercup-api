@@ -719,6 +719,22 @@ app.post('/api/ryder/score-hole', async (req, res) => {
         res.status(500).json({ error: 'Failed to save hole score' });
     }
 });
+// Clear a single hole's result and (if Keep Score was used) its raw per-player scores -- the
+// Finalize modal's "Cancel" option, for when the deciding hole was actually scored wrong
+app.post('/api/ryder/clear-hole-score', async (req, res) => {
+    try {
+        const { year, group, match, hole } = req.body;
+        if (!year || !match || !hole) {
+            return res.status(400).json({ error: 'year, match, and hole are required' });
+        }
+        await (0, ryderService_1.clearHoleScore)(year, group || 1, match, hole);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error clearing hole score:', error.message);
+        res.status(500).json({ error: 'Failed to clear hole score' });
+    }
+});
 // Whether anything is actually live this year -- used to decide whether Leaderboard/Standings
 // should even start their 30s auto-refresh, rather than polling year-round for an event that
 // only runs one day a year

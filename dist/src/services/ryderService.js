@@ -35,6 +35,7 @@ exports.markMatchOpened = markMatchOpened;
 exports.clearMatchOpened = clearMatchOpened;
 exports.hasLiveActivity = hasLiveActivity;
 exports.saveHoleScore = saveHoleScore;
+exports.clearHoleScore = clearHoleScore;
 exports.unfinalizeMatch = unfinalizeMatch;
 exports.saveMatchResult = saveMatchResult;
 exports.addPlayer = addPlayer;
@@ -1008,6 +1009,27 @@ async function saveHoleScore(year, groupId, matchId, holeId, result) {
     await config_1.default.query(`INSERT INTO RyderMatchScore (RyderYear, GroupID, MatchID, HoleID, Result, LastUpdateUser)
      VALUES (?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE Result = ?`, [year, groupId, matchId, holeId, result, SCORER_NAME, result]);
+}
+/**
+ * Clear a single hole's result entirely -- the "Cancel" option on the Finalize modal, for when
+ * the hole that just triggered "match decided" was actually scored wrong. Deletes both the
+ * match-play winner (RyderMatchScore) and, if Keep Score was used, the raw per-player gross
+ * scores (RyderMatchPlayerScore) for that hole, so the scorer gets a genuinely blank slate to
+ * re-enter it rather than just having the winner reset while stale gross scores linger.
+ */
+async function clearHoleScore(year, groupId, matchId, holeId) {
+    await config_1.default.query('DELETE FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ? AND HoleID = ?', [
+        year,
+        groupId,
+        matchId,
+        holeId,
+    ]);
+    await config_1.default.query('DELETE FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ? AND HoleID = ?', [
+        year,
+        groupId,
+        matchId,
+        holeId,
+    ]);
 }
 /**
  * Record a match's final result — mirrors savematchres.php. matchScore is holes-up (positive
