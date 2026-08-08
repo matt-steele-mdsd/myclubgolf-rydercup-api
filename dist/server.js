@@ -782,6 +782,21 @@ app.post('/api/ryder/finalize-match', async (req, res) => {
         res.status(500).json({ error: 'Failed to finalize match' });
     }
 });
+// Un-finalize a match -- a correction to an earlier hole made it no longer actually decided
+app.post('/api/ryder/unfinalize-match', async (req, res) => {
+    try {
+        const { year, group, match } = req.body;
+        if (!year || !match) {
+            return res.status(400).json({ error: 'year and match are required' });
+        }
+        await (0, ryderService_1.unfinalizeMatch)(year, group || 1, match);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error unfinalizing match:', error.message);
+        res.status(500).json({ error: 'Failed to unfinalize match' });
+    }
+});
 // Add a new player to the roster (Admin -> Add Players)
 app.post('/api/ryder/players', async (req, res) => {
     try {

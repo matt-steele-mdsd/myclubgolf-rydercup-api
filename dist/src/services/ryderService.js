@@ -35,6 +35,7 @@ exports.markMatchOpened = markMatchOpened;
 exports.clearMatchOpened = clearMatchOpened;
 exports.hasLiveActivity = hasLiveActivity;
 exports.saveHoleScore = saveHoleScore;
+exports.unfinalizeMatch = unfinalizeMatch;
 exports.saveMatchResult = saveMatchResult;
 exports.addPlayer = addPlayer;
 exports.getPlayersForGroup = getPlayersForGroup;
@@ -1015,6 +1016,18 @@ async function saveHoleScore(year, groupId, matchId, holeId, result) {
  * which re-derived the session from a third, differently-hardcoded MatchID range table, this
  * takes the session straight from RyderMatch.SessionID (via getMatchSetup).
  */
+/**
+ * Un-finalize a match -- deletes its RyderMatchResults row, the counterpart to saveMatchResult.
+ * Needed when a correction to an earlier hole (on an already-finalized match) changes the
+ * standing enough that the match is no longer actually decided (e.g. fixing a hole flips 3&2 to
+ * 2 down with 2 to play) -- without this, the stale finalized row keeps showing the old, now-
+ * wrong result everywhere that reads RyderMatchResults (Session Leaderboard, matchpicker's
+ * "Completed" badge, a linked sibling's tab-hiding logic) even though the client-side standing
+ * has already moved on. Confirmed real case, Matt 2026-08-08.
+ */
+async function unfinalizeMatch(year, groupId, matchId) {
+    await config_1.default.query('DELETE FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+}
 async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, holesRemaining) {
     let winner;
     let points;
