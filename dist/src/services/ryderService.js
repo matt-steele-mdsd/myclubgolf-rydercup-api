@@ -19,12 +19,15 @@ exports.getEventCourse = getEventCourse;
 exports.setEventCourse = setEventCourse;
 exports.getEventCourseHistory = getEventCourseHistory;
 exports.getSessionsForYear = getSessionsForYear;
+exports.getPreviousSessionSummary = getPreviousSessionSummary;
+exports.copyPreviousYearSessions = copyPreviousYearSessions;
 exports.createSession = createSession;
 exports.updateSession = updateSession;
 exports.deleteSession = deleteSession;
 exports.deleteMatch = deleteMatch;
 exports.getRyderResults = getRyderResults;
 exports.getRyderClinchInfo = getRyderClinchInfo;
+exports.getClinchStatus = getClinchStatus;
 exports.getRyderPointsTimeline = getRyderPointsTimeline;
 exports.getRyderCompletedMatches = getRyderCompletedMatches;
 exports.getRyderLeaderboard = getRyderLeaderboard;
@@ -49,6 +52,7 @@ exports.isRosterSavedForYear = isRosterSavedForYear;
 exports.getActiveRosterForSetup = getActiveRosterForSetup;
 exports.getSittingOutForSession = getSittingOutForSession;
 exports.getLatestHdcp = getLatestHdcp;
+exports.getHdcpForYear = getHdcpForYear;
 exports.saveHdcp = saveHdcp;
 exports.getHandicapFreezeStatus = getHandicapFreezeStatus;
 exports.freezeHandicaps = freezeHandicaps;
@@ -356,6 +360,42 @@ async function getSessionsForYear(groupId, year) {
     }));
 }
 /**
+ * For the "Copy sessions from previous year" shortcut on Setup Sessions: find the most recent
+ * year before targetYear that has any sessions defined for this group, plus how many. Returns
+ * null when there's no earlier year with sessions (nothing to copy from). Used to decide whether
+ * to show the recommendation callout and what year/count to name in it.
+ */
+async function getPreviousSessionSummary(groupId, targetYear) {
+    const [rows] = await config_1.default.query('SELECT RyderYear, COUNT(*) AS cnt FROM RyderSession WHERE GroupID = ? AND RyderYear < ? GROUP BY RyderYear ORDER BY RyderYear DESC LIMIT 1', [groupId, targetYear]);
+    if (rows.length === 0)
+        return null;
+    return { fromYear: rows[0].RyderYear, count: Number(rows[0].cnt) };
+}
+/**
+ * Copy every session *definition* (name / team-vs-individual / team size / format / holes /
+ * course) from the most recent prior year into targetYear — the "we play the same format every
+ * year" shortcut. Deliberately copies only the session structure, NOT the matches: the roster
+ * changes year to year, so matches are still paired up per session afterward. New sessions get
+ * fresh SessionIDs (1, 2, 3…) preserving the source order. Guards: throws if targetYear already
+ * has sessions (so the shortcut can't silently duplicate an already-built year — the client only
+ * offers it on an empty year), and returns [] if there's no earlier year to copy from.
+ */
+async function copyPreviousYearSessions(groupId, targetYear) {
+    const [existing] = await config_1.default.query('SELECT 1 FROM RyderSession WHERE GroupID = ? AND RyderYear = ? LIMIT 1', [groupId, targetYear]);
+    if (existing.length > 0) {
+        throw new Error(`${targetYear} already has sessions — nothing copied.`);
+    }
+    const summary = await getPreviousSessionSummary(groupId, targetYear);
+    if (!summary)
+        return [];
+    const [srcRows] = await config_1.default.query('SELECT Name, Type, TeamSize, Format, Holes, CourseID FROM RyderSession WHERE GroupID = ? AND RyderYear = ? ORDER BY SessionID', [groupId, summary.fromYear]);
+    const created = [];
+    for (const src of srcRows) {
+        created.push(await createSession(groupId, targetYear, src.Name, src.Type, src.Holes, src.TeamSize, src.Format, src.CourseID));
+    }
+    return created;
+}
+/**
  * Create a new session for a year/group — SessionID is allocated as MAX(SessionID)+1 for
  * that year/group (starting at 1), same allocation pattern already used for RyderEvents'
  * GroupID and RyderMatch's MatchID. `teamSize` (players per side, 2-4) and `format` only mean
@@ -405,6 +445,12 @@ async function deleteSession(groupId, year, sessionId) {
     const [matchRows] = await config_1.default.query('SELECT DISTINCT MatchID FROM RyderMatch WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?', [year, groupId, sessionId]);
     const matchIds = matchRows.map((r) => r.MatchID);
     if (matchIds.length > 0) {
+        // Full match-scoped cascade (mirrors deleteGroup's groupScopedTables) so a deleted session
+        // leaves no orphaned keep-score rows, teebox picks, links, or in-progress markers behind.
+        await config_1.default.query('DELETE FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)', [year, groupId, matchIds]);
+        await config_1.default.query('DELETE FROM RyderMatchPlayerTee WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)', [year, groupId, matchIds]);
+        await config_1.default.query('DELETE FROM RyderMatchLink WHERE RyderYear = ? AND GroupID = ? AND (MatchID1 IN (?) OR MatchID2 IN (?))', [year, groupId, matchIds, matchIds]);
+        await config_1.default.query('DELETE FROM RyderMatchOpen WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)', [year, groupId, matchIds]);
         await config_1.default.query('DELETE FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)', [year, groupId, matchIds]);
         await config_1.default.query('DELETE FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND MatchID IN (?)', [year, groupId, matchIds]);
         await config_1.default.query('DELETE FROM RyderMatch WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?', [year, groupId, sessionId]);
@@ -412,11 +458,17 @@ async function deleteSession(groupId, year, sessionId) {
     await config_1.default.query('DELETE FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [groupId, year, sessionId]);
 }
 /**
- * Delete a single match (Session Matches' "x" button) — same delete-cascade as deleteSession
- * (RyderMatchScore -> RyderMatchResults -> RyderMatch) but scoped to one MatchID instead of a
- * whole session, since a match set up wrong is a per-match mistake, not a whole-session one.
+ * Delete a single match (Session Matches' "x" button) — same full match-scoped delete-cascade as
+ * deleteSession (all RyderMatch* tables) but scoped to one MatchID instead of a whole session,
+ * since a match set up wrong is a per-match mistake, not a whole-session one.
  */
 async function deleteMatch(groupId, year, matchId) {
+    // Full match-scoped cascade (mirrors deleteSession / deleteGroup) so no keep-score rows, teebox
+    // picks, links, or in-progress markers are orphaned when a single match is removed.
+    await config_1.default.query('DELETE FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    await config_1.default.query('DELETE FROM RyderMatchPlayerTee WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    await config_1.default.query('DELETE FROM RyderMatchLink WHERE RyderYear = ? AND GroupID = ? AND (MatchID1 = ? OR MatchID2 = ?)', [year, groupId, matchId, matchId]);
+    await config_1.default.query('DELETE FROM RyderMatchOpen WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
     await config_1.default.query('DELETE FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
     await config_1.default.query('DELETE FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
     await config_1.default.query('DELETE FROM RyderMatch WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
@@ -461,7 +513,7 @@ async function getRyderResults(year, groupId = 1) {
     }
     const [matchRows] = await config_1.default.query(`SELECT rm.MatchID, rm.PlayerID, rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.RyderYear = ? AND rm.GroupID = ?
      ORDER BY rp.LastName, rp.FirstName`, [year, groupId]);
     const playerTotals = new Map();
@@ -584,6 +636,27 @@ async function getRyderClinchInfo(year, groupId) {
     return null;
 }
 /**
+ * Cheap clinch gate for the every-30s poller. A clinch can't have happened until the total points
+ * already decided reach the lower of the two teams' thresholds — a team's points can never exceed
+ * the points awarded so far (each finalized match awards exactly 1 point total, 1-0 or 0.5-0.5, so
+ * decided points = number of finalized matches). While that's not yet true this returns
+ * `possible:false` after only a COUNT — skipping the full result replay + roster join entirely — so
+ * the client can back off to a slow poll. Once it IS possible, it runs the real getRyderClinchInfo.
+ */
+async function getClinchStatus(year, groupId) {
+    const thresholds = await getClinchThresholds(year, groupId);
+    if (!thresholds)
+        return { clinch: null, possible: false, pointsUntilPossible: 999 };
+    const minThreshold = Math.min(thresholds.usaThreshold, thresholds.euroThreshold);
+    const [decidedRows] = await config_1.default.query('SELECT COUNT(DISTINCT MatchID) AS decided FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ?', [year, groupId]);
+    const decidedPoints = Number(decidedRows[0]?.decided ?? 0);
+    if (decidedPoints < minThreshold) {
+        return { clinch: null, possible: false, pointsUntilPossible: minThreshold - decidedPoints };
+    }
+    const clinch = await getRyderClinchInfo(year, groupId);
+    return { clinch, possible: true, pointsUntilPossible: 0 };
+}
+/**
  * The running point totals over time, one entry per completed match in the order results were
  * actually recorded (LastUpdateDt) -- for the collapsible points-progression chart on Standings.
  * Same replay pattern as getRyderClinchInfo, but keeps every step instead of stopping at the
@@ -675,7 +748,7 @@ async function getMatchRosters(year, groupId, includeHdcp = false, sessionId) {
         ? `SELECT rm.MatchID, rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name,
                 COALESCE(h.HdcpIndex, h.Hdcp) AS hdcp
          FROM RyderMatch rm
-         INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+         INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
          LEFT JOIN RyderHdcp h ON h.PlayerID = rm.PlayerID AND h.Year = (
            SELECT MAX(Year) FROM RyderHdcp WHERE PlayerID = rm.PlayerID
          )
@@ -683,7 +756,7 @@ async function getMatchRosters(year, groupId, includeHdcp = false, sessionId) {
          ORDER BY rm.MatchID, rm.Team DESC, name`
         : `SELECT rm.MatchID, rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
          FROM RyderMatch rm
-         INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+         INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
          WHERE rm.RyderYear = ? AND rm.GroupID = ?${sessionFilter}
          ORDER BY rm.MatchID, rm.Team DESC, name`, params);
     const rosters = new Map();
@@ -789,7 +862,7 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
 async function getRyderScorecard(year, groupId, matchId) {
     const [matchRows] = await config_1.default.query(`SELECT rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.RyderYear = ? AND rm.GroupID = ? AND rm.MatchID = ?
      ORDER BY rm.Team DESC, name`, [year, groupId, matchId]);
     if (matchRows.length === 0)
@@ -915,7 +988,7 @@ async function getGenderedHoleRankings(courseId, holeNumbers) {
 async function getMatchSetup(year, groupId, matchId) {
     const [matchRows] = await config_1.default.query(`SELECT rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.RyderYear = ? AND rm.GroupID = ? AND rm.MatchID = ?
      ORDER BY rm.Team DESC, name`, [year, groupId, matchId]);
     if (matchRows.length === 0)
@@ -1154,14 +1227,19 @@ async function seedRosterFromPreviousYearIfEmpty(groupId, year) {
  * getRyderResults/getMatchRosters).
  */
 async function getPlayerRoster(year, groupId) {
-    await seedRosterFromPreviousYearIfEmpty(groupId, year);
+    // A past year is view-only (Captains -> Course & Roster history): don't seed (a write) on read,
+    // and show that year's own handicap (or blank) rather than the player's current number.
+    const isPastYear = year < new Date().getFullYear();
+    if (!isPastYear) {
+        await seedRosterFromPreviousYearIfEmpty(groupId, year);
+    }
     const [playerRows] = await config_1.default.query(`SELECT p.PlayerID, p.FirstName, p.LastName, p.Retired, p.State, p.Email, p.Phone, p.Gender, p.Team AS DefaultTeam, ro.Team AS RosterTeam
      FROM RyderPlayer p
      LEFT JOIN RyderRoster ro ON ro.PlayerID = p.PlayerID AND ro.GroupID = p.GroupID AND ro.RyderYear = ?
      WHERE p.GroupID = ?
      ORDER BY p.LastName, p.FirstName`, [year, groupId]);
     const players = await Promise.all(playerRows.map(async (r) => {
-        const { hdcp, fromGhin } = await getLatestHdcp(r.PlayerID);
+        const { hdcp, fromGhin } = isPastYear ? await getHdcpForYear(r.PlayerID, year) : await getLatestHdcp(r.PlayerID);
         return {
             playerId: r.PlayerID,
             firstName: r.FirstName,
@@ -1298,6 +1376,17 @@ async function getLatestHdcp(playerId) {
     const hdcp = row.HdcpIndex != null ? Number(row.HdcpIndex) : row.Hdcp;
     return { hdcp, fromGhin: row.LastUpdateUser === exports.GHIN_SYNC_USER };
 }
+/** A player's handicap as it was recorded for a specific year (RyderHdcp is Year-scoped), or
+ * null if none was on file that year. Used for the read-only past-year roster view so it shows
+ * the handicap that actually applied that year rather than the player's current number. */
+async function getHdcpForYear(playerId, year) {
+    const [rows] = await config_1.default.query('SELECT HdcpIndex, Hdcp, LastUpdateUser FROM RyderHdcp WHERE PlayerID = ? AND Year = ? LIMIT 1', [playerId, year]);
+    if (rows.length === 0)
+        return { hdcp: null, fromGhin: false };
+    const row = rows[0];
+    const hdcp = row.HdcpIndex != null ? Number(row.HdcpIndex) : row.Hdcp;
+    return { hdcp, fromGhin: row.LastUpdateUser === exports.GHIN_SYNC_USER };
+}
 /**
  * Record a player's handicap for a given year — upserts RyderHdcp(Year, PlayerID). This event
  * only runs once a year, but players often re-draft or get a new club handicap in the days
@@ -1330,9 +1419,10 @@ const DEFAULT_RYDER_OPTIONS = {
     altShotLowPct: 60,
     altShotHighPct: 40,
     nineHoleHalfStrokes: false,
+    womenHandicapHoles: true,
 };
 async function getRyderOptions(groupId) {
-    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles FROM RyderOptions WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return DEFAULT_RYDER_OPTIONS;
     const r = rows[0];
@@ -1343,13 +1433,14 @@ async function getRyderOptions(groupId) {
         altShotLowPct: r.AltShotLowPct,
         altShotHighPct: r.AltShotHighPct,
         nineHoleHalfStrokes: !!r.NineHoleHalfStrokes,
+        womenHandicapHoles: !!r.WomenHandicapHoles,
     };
 }
 async function saveRyderOptions(groupId, options) {
-    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes) VALUES (?, ?, ?, ?, ?, ?, ?)
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled),
        BestBallLowestHandicap = VALUES(BestBallLowestHandicap), AltShotLowPct = VALUES(AltShotLowPct), AltShotHighPct = VALUES(AltShotHighPct),
-       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes)`, [
+       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes), WomenHandicapHoles = VALUES(WomenHandicapHoles)`, [
         groupId,
         options.handicapsEnabled ? 1 : 0,
         options.keepScoreEnabled ? 1 : 0,
@@ -1358,6 +1449,7 @@ async function saveRyderOptions(groupId, options) {
         options.altShotLowPct,
         options.altShotHighPct,
         options.nineHoleHalfStrokes ? 1 : 0,
+        options.womenHandicapHoles ? 1 : 0,
     ]);
 }
 /**
@@ -1416,7 +1508,7 @@ async function getMatchPlayerTees(year, groupId, matchId) {
             CONCAT(rp.FirstName, ' ', rp.LastName) AS name,
             t.GhinTeeSetId, t.TeeName, t.CourseHandicap
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      INNER JOIN Course c ON c.CourseID = rm.CourseID
      LEFT JOIN RyderSession rs ON rs.GroupID = rm.GroupID AND rs.RyderYear = rm.RyderYear AND rs.SessionID = rm.SessionID
      LEFT JOIN RyderMatchPlayerTee t ON t.GroupID = rm.GroupID AND t.RyderYear = rm.RyderYear AND t.MatchID = rm.MatchID AND t.PlayerID = rm.PlayerID
@@ -1517,7 +1609,7 @@ async function getMatchPairing(year, groupId, matchId) {
     const sessionId = (await getMatchSessionId(year, groupId, matchId)) ?? 1;
     const [rows] = await config_1.default.query(`SELECT rm.CourseID, rm.Team, rm.PlayerID, CONCAT(rp.LastName, ', ', rp.FirstName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.RyderYear = ? AND rm.GroupID = ? AND rm.MatchID = ?
      ORDER BY rm.Team DESC, name`, [year, groupId, matchId]);
     const courseId = rows.length > 0 ? rows[0].CourseID : ((await getEventCourse(groupId, year))?.courseId ?? 1);
@@ -1597,7 +1689,7 @@ async function getPlayerRanking(groupId) {
     }
     const [matchRows] = await config_1.default.query(`SELECT rm.RyderYear, rm.MatchID, rm.PlayerID, rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.GroupID = ?`, [groupId]);
     const totals = new Map();
     for (const m of matchRows) {
@@ -1644,7 +1736,7 @@ async function getTeamsHistory(groupId) {
     }
     const [matchRows] = await config_1.default.query(`SELECT rm.RyderYear, rm.MatchID, rm.Team, rm.PlayerID, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.GroupID = ?
      ORDER BY rm.RyderYear, rm.MatchID, rm.Team`, [groupId]);
     const teamGroups = new Map();
@@ -1706,7 +1798,7 @@ async function getSinglesHistory(groupId) {
     }
     const [matchRows] = await config_1.default.query(`SELECT rm.RyderYear, rm.MatchID, rm.Team, rm.PlayerID, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
-     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID
+     INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.GroupID = ?
      ORDER BY rm.RyderYear, rm.MatchID, rm.Team`, [groupId]);
     const teamGroups = new Map();

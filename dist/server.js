@@ -109,7 +109,9 @@ app.get('/api/ryder/leaderboard', async (req, res) => {
     }
 });
 // Which team (if any) has clinched the Cup outright this year, and the specific match that
-// did it -- see getRyderClinchInfo. Null when it hasn't been decided yet.
+// did it -- see getRyderClinchInfo. Null when it hasn't been decided yet. KEPT for the frozen
+// v1.0.5 app, which expects this exact (RyderClinchInfo | null) shape -- new clients use
+// /clinch-status below instead.
 app.get('/api/ryder/clinch', async (req, res) => {
     try {
         const year = parseInt(req.query.year);
@@ -123,6 +125,25 @@ app.get('/api/ryder/clinch', async (req, res) => {
     catch (error) {
         console.error('Error fetching Ryder clinch info:', error.message);
         res.status(500).json({ error: 'Failed to fetch Ryder clinch info' });
+    }
+});
+// Clinch STATUS for the every-30s poller (new clients): whether a clinch is even possible yet via
+// a cheap COUNT gate (see getClinchStatus) plus the clinch payload once it happens -- lets the
+// client back off to a slow poll during the early sessions when clinching is mathematically
+// impossible. Separate from /clinch above so the frozen v1.0.5 app's contract stays intact.
+app.get('/api/ryder/clinch-status', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const status = await (0, ryderService_1.getClinchStatus)(year, groupId);
+        res.json(status);
+    }
+    catch (error) {
+        console.error('Error fetching Ryder clinch status:', error.message);
+        res.status(500).json({ error: 'Failed to fetch Ryder clinch status' });
     }
 });
 // Running point totals over time (one entry per completed match, in recording order) plus the
@@ -233,6 +254,38 @@ app.get('/api/ryder/sessions', async (req, res) => {
     catch (error) {
         console.error('Error fetching sessions:', error.message);
         res.status(500).json({ error: 'Failed to fetch sessions' });
+    }
+});
+// Summary of the most recent prior year with sessions, for the "Copy sessions from previous
+// year" shortcut (Admin -> Setup Sessions). Returns null when there's nothing to copy.
+app.get('/api/ryder/sessions/previous', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        if (!year) {
+            return res.status(400).json({ error: 'year query param is required' });
+        }
+        const summary = await (0, ryderService_1.getPreviousSessionSummary)(groupId, year);
+        res.json(summary);
+    }
+    catch (error) {
+        console.error('Error fetching previous-session summary:', error.message);
+        res.status(500).json({ error: 'Failed to fetch previous-session summary' });
+    }
+});
+// Copy last year's session definitions into a year (Admin -> Setup Sessions "Copy sessions" callout)
+app.post('/api/ryder/sessions/copy', async (req, res) => {
+    try {
+        const { year, group } = req.body;
+        if (!year) {
+            return res.status(400).json({ error: 'year is required' });
+        }
+        const sessions = await (0, ryderService_1.copyPreviousYearSessions)(group || 1, year);
+        res.json(sessions);
+    }
+    catch (error) {
+        console.error('Error copying sessions:', error.message);
+        res.status(500).json({ error: error.message || 'Failed to copy sessions' });
     }
 });
 // Create a new session for a year/group (Admin -> Setup Sessions "+ Add Session")
@@ -534,7 +587,9 @@ app.get('/api/ryder/options', async (req, res) => {
 // Save this event's Captain options
 app.post('/api/ryder/options', async (req, res) => {
     try {
-        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes } = req.body;
+        // womenHandicapHoles defaults to true when the request omits it -- so an older client that
+        // doesn't know the field can't silently turn women's handicap holes off on save.
+        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes, womenHandicapHoles = true } = req.body;
         if (!groupId)
             return res.status(400).json({ error: 'groupId is required' });
         const lowPct = altShotLowPct ?? 60;
@@ -549,6 +604,7 @@ app.post('/api/ryder/options', async (req, res) => {
             altShotLowPct: lowPct,
             altShotHighPct: highPct,
             nineHoleHalfStrokes: !!nineHoleHalfStrokes,
+            womenHandicapHoles: !!womenHandicapHoles,
         });
         res.json({ status: 'ok' });
     }
