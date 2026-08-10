@@ -79,6 +79,7 @@ exports.getSinglesHistory = getSinglesHistory;
 exports.renameEventYear = renameEventYear;
 exports.clearEventYear = clearEventYear;
 const config_1 = __importDefault(require("../db/config"));
+const strokeAllocation_1 = require("../utils/strokeAllocation");
 /**
  * Get every distinct Ryder Cup year on record, ascending — mirrors ryderhome.php's year
  * dropdown. If the current calendar year has no matches yet, it's added as a selectable
@@ -899,6 +900,62 @@ async function getRyderScorecard(year, groupId, matchId) {
     const winner = completed ? resultRows[0].Winner : null;
     const result = completed ? resultRows[0].Result : null;
     const displayNumbers = await getMatchDisplayNumbers(year, groupId);
+    // Per-player gross scorecard (Keep Score) for the gross grid: each player's per-hole gross plus
+    // their stroke holes and par. Best-effort and wrapped so it can never break the main scorecard --
+    // a flag-tap match (no gross recorded) or missing tee/handicap data just yields empty/null cells.
+    let playerScores = [];
+    try {
+        const [tees, options, setup] = await Promise.all([
+            getMatchPlayerTees(year, groupId, matchId),
+            getRyderOptions(groupId),
+            getMatchSetup(year, groupId, matchId),
+        ]);
+        if (tees && setup) {
+            const [grossRows] = await config_1.default.query('SELECT PlayerID, HoleID, Score FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+            const grossByPlayerHole = new Map();
+            for (const r of grossRows)
+                grossByPlayerHole.set(`${r.PlayerID}:${r.HoleID}`, r.Score);
+            let allocation = null;
+            let fullAllocation = null;
+            if (options.handicapsEnabled && tees.players.every((p) => p.courseHandicap !== null)) {
+                const strokeHoles = setup.holes.map((h) => ({ hole: h.hole, hdcp: h.hdcp, hdcpMale: h.hdcpMale, hdcpFemale: h.hdcpFemale }));
+                allocation = (0, strokeAllocation_1.computeMatchStrokes)({
+                    players: tees.players.map((p) => ({ playerId: p.playerId, team: p.team, courseHandicap: p.courseHandicap, gender: p.gender })),
+                    format: tees.format,
+                    holes: strokeHoles,
+                    altShotLowPct: options.altShotLowPct,
+                    altShotHighPct: options.altShotHighPct,
+                    nineHoleHalfStrokes: options.nineHoleHalfStrokes,
+                    womenHandicapHoles: options.womenHandicapHoles,
+                });
+                // Separate FULL-handicap allocation (each player's own Course Handicap, not off the low) for
+                // the GHIN "most likely score" fill-ins on holes not played after the match was decided.
+                fullAllocation = (0, strokeAllocation_1.computeHandicapStrokesPerPlayer)({
+                    players: tees.players.map((p) => ({ playerId: p.playerId, courseHandicap: p.courseHandicap, gender: p.gender })),
+                    holes: strokeHoles,
+                    womenHandicapHoles: options.womenHandicapHoles,
+                });
+            }
+            playerScores = tees.players.map((p) => ({
+                playerId: p.playerId,
+                name: p.name,
+                team: p.team,
+                holes: setup.holes.map((h) => {
+                    const g = grossByPlayerHole.get(`${p.playerId}:${h.hole}`);
+                    return {
+                        hole: h.hole,
+                        par: h.par,
+                        gross: g === undefined ? null : g,
+                        strokes: allocation?.get(p.playerId)?.[h.hole] ?? 0,
+                        fullStrokes: fullAllocation?.get(p.playerId)?.[h.hole] ?? 0,
+                    };
+                }),
+            }));
+        }
+    }
+    catch {
+        playerScores = [];
+    }
     return {
         matchId,
         displayNumber: displayNumbers.get(matchId) ?? matchId,
@@ -914,6 +971,7 @@ async function getRyderScorecard(year, groupId, matchId) {
         amount,
         thru,
         sessionMatchIds,
+        playerScores,
     };
 }
 /** Attribution recorded on writes, same purpose as the legacy pages' hardcoded scorer name. */

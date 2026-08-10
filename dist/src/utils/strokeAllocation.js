@@ -19,6 +19,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.computeMatchStrokes = computeMatchStrokes;
+exports.computeHandicapStrokesPerPlayer = computeHandicapStrokesPerPlayer;
 exports.buildStrokeSummaryLines = buildStrokeSummaryLines;
 exports.getScoringUnits = getScoringUnits;
 exports.computeHoleWinnerFromScores = computeHoleWinnerFromScores;
@@ -37,6 +38,9 @@ function effectiveCourseHandicap(rawCH, isNineHole, nineHoleHalfStrokes) {
 }
 function computeMatchStrokes(input) {
     const { players, format, holes, altShotLowPct, altShotHighPct, nineHoleHalfStrokes } = input;
+    // Default on (each gender on its own stroke index) when omitted. When off, every allocate() call
+    // is collapsed to the men's ranking below, so women stroke on the men's handicap holes.
+    const womenHandicapHoles = input.womenHandicapHoles !== false;
     const isNineHole = holes.length === 9;
     const unitSize = isNineHole && nineHoleHalfStrokes ? 0.5 : 1;
     const hdcpFor = (h, gender) => (gender === 'M' ? h.hdcpMale : h.hdcpFemale) ?? h.hdcp;
@@ -56,7 +60,7 @@ function computeMatchStrokes(input) {
     // as three separate 0.5s across three different holes.
     const stepsPerHole = Math.round(1 / unitSize);
     const allocate = (units, gender) => {
-        const ranked = rankedByGender[gender];
+        const ranked = rankedByGender[womenHandicapHoles ? gender : 'M'];
         const allocation = emptyAllocation();
         for (let i = 0; i < units; i++) {
             const holeIndex = Math.floor(i / stepsPerHole) % ranked.length;
@@ -107,12 +111,53 @@ function computeMatchStrokes(input) {
     return result;
 }
 /**
+ * Each player's WHOLE handicap strokes per hole off their OWN full Course Handicap -- NOT the
+ * match-play "off the low" difference computeMatchStrokes gives. This is for GHIN "most likely
+ * score" fill-ins on holes that were never played because the match was already decided: the USGA
+ * rule is you post par + the strokes you're entitled to on each remaining hole (par if 0 strokes,
+ * bogey if 1, double if 2, ...). Whole strokes only -- GHIN scores are whole numbers, so there's
+ * no half-stroke mode here; a nine-hole session halves-and-rounds the Course Handicap the standard
+ * USGA way. A plus handicap yields -1 on its hardest holes (most-likely below par there), which is
+ * the same net-par concept run the other direction.
+ */
+function computeHandicapStrokesPerPlayer(input) {
+    const { players, holes } = input;
+    const womenHandicapHoles = input.womenHandicapHoles !== false;
+    const isNineHole = holes.length === 9;
+    const hdcpFor = (h, gender) => (gender === 'M' ? h.hdcpMale : h.hdcpFemale) ?? h.hdcp;
+    const rankedByGender = {
+        M: [...holes].sort((a, b) => hdcpFor(a, 'M') - hdcpFor(b, 'M')),
+        F: [...holes].sort((a, b) => hdcpFor(a, 'F') - hdcpFor(b, 'F')),
+    };
+    const result = new Map();
+    for (const p of players) {
+        const eff = isNineHole ? Math.round(p.courseHandicap / 2) : p.courseHandicap;
+        const ranked = rankedByGender[womenHandicapHoles ? p.gender : 'M'];
+        const allocation = Object.fromEntries(holes.map((h) => [h.hole, 0]));
+        const count = Math.abs(eff);
+        const sign = eff >= 0 ? 1 : -1;
+        for (let i = 0; i < count; i++)
+            allocation[ranked[i % ranked.length].hole] += sign;
+        result.set(p.playerId, allocation);
+    }
+    return result;
+}
+/**
  * Plain-English explanation of who plays off scratch and which holes everyone else strokes on
  * for a match, shown once up front (matchtees.tsx, before "Start Match") rather than repeated
  * on hole 1/10 -- confirmed with Matt 2026-08-06: the per-hole "Strokes This Hole" box is the
  * ongoing in-play reference, this is just the up-front orientation. 'O' sessions never get
  * strokes (no defined rule), so there's nothing to explain for those.
  */
+/** "Chris Dietz" / "Chris Dietz and Jason Rutkoski" / "Chris Dietz, Jason Rutkoski, and Pete
+ * Westerheide" -- for listing every player tied for the match's lowest handicap. */
+function joinNames(names) {
+    if (names.length <= 1)
+        return names[0] ?? '';
+    if (names.length === 2)
+        return `${names[0]} and ${names[1]}`;
+    return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
 function buildStrokeSummaryLines(allocation, players, format) {
     if (format === 'O' || players.length === 0)
         return [];
@@ -128,6 +173,13 @@ function buildStrokeSummaryLines(allocation, players, format) {
         const teamE = players.filter((p) => p.team === 'E');
         const uTotal = teamU[0] ? totalFor(teamU[0].playerId) : 0;
         const eTotal = teamE[0] ? totalFor(teamE[0].playerId) : 0;
+        // Equal team handicaps -> neither team strokes (both totals are 0, since strokes are relative
+        // to the lower team). Naming one team as "the lower team" here reads as if the other is higher,
+        // so say plainly that it's even instead.
+        if (uTotal === eTotal) {
+            lines.push({ prefix: 'Handicaps are the same — no strokes this match.', boldName: '', suffix: '' });
+            return lines;
+        }
         const scratchTeam = uTotal <= eTotal ? teamU : teamE;
         const strokeTeam = uTotal <= eTotal ? teamE : teamU;
         lines.push({
@@ -135,7 +187,7 @@ function buildStrokeSummaryLines(allocation, players, format) {
             boldName: scratchTeam.map((p) => p.name).join(' & '),
             suffix: ' — that team gets no strokes.',
         });
-        if (strokeTeam.length > 0 && eTotal !== uTotal) {
+        if (strokeTeam.length > 0) {
             const total = totalFor(strokeTeam[0].playerId);
             lines.push({
                 prefix: '',
@@ -145,18 +197,27 @@ function buildStrokeSummaryLines(allocation, players, format) {
         }
     }
     else {
-        const scratchPlayer = players.reduce((min, p) => (totalFor(p.playerId) < totalFor(min.playerId) ? p : min));
+        // The lowest handicap always nets to 0 strokes by construction -- but when two or more
+        // players are tied for it (e.g. same Course Handicap), only the first one used to get named
+        // here, and the rest were silently skipped by the total===0 check below instead of being
+        // listed as also getting no strokes (confirmed real case, Matt 2026-08-07: Chris Dietz and
+        // Jason Rutkoski tied, Jason never appeared anywhere in the summary).
+        const scratchPlayers = players.filter((p) => totalFor(p.playerId) === 0);
+        const strokePlayers = players.filter((p) => totalFor(p.playerId) > 0);
+        // Nobody strokes -> everyone's off the same handicap (e.g. a Singles match where both players
+        // have the same Course Handicap). Naming them all as "the lowest handicap" reads oddly, so say
+        // plainly it's even instead.
+        if (strokePlayers.length === 0) {
+            lines.push({ prefix: 'Handicaps are the same — no strokes this match.', boldName: '', suffix: '' });
+            return lines;
+        }
         lines.push({
             prefix: 'We are playing off the lowest handicap, which is ',
-            boldName: scratchPlayer.name,
-            suffix: ' — that person gets no strokes.',
+            boldName: joinNames(scratchPlayers.map((p) => p.name)),
+            suffix: ' — gets no strokes.',
         });
-        for (const p of players) {
-            if (p.playerId === scratchPlayer.playerId)
-                continue;
+        for (const p of strokePlayers) {
             const total = totalFor(p.playerId);
-            if (total === 0)
-                continue;
             lines.push({
                 prefix: '',
                 boldName: p.name,
