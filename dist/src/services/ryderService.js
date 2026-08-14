@@ -809,7 +809,7 @@ async function getMatchDisplayNumbers(year, groupId) {
  * also scoped to just this session instead of the whole year's matches (see getMatchRosters).
  */
 async function getRyderLeaderboard(year, groupId, sessionId) {
-    const [sessionRows, pointsRows, rosters, displayNumbers, progressRows, completedRows] = await Promise.all([
+    const [sessionRows, pointsRows, rosters, displayNumbers, upcomingRows, progressRows, completedRows] = await Promise.all([
         config_1.default.query('SELECT Name FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [
             groupId,
             year,
@@ -822,6 +822,14 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
        WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?`, [year, groupId, sessionId]).then(([rows]) => rows),
         getMatchRosters(year, groupId, false, sessionId),
         getMatchDisplayNumbers(year, groupId),
+        // Upcoming: scheduled for this session, no hole scored yet, and no recorded result (covers
+        // a flag-tap match finished with zero RyderMatchScore rows -- that's completed, not upcoming).
+        config_1.default.query(`SELECT DISTINCT MatchID
+       FROM RyderMatch
+       WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?
+       AND MatchID NOT IN (SELECT DISTINCT MatchID FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ?)
+       AND MatchID NOT IN (SELECT MatchID FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ?)
+       ORDER BY MatchID`, [year, groupId, sessionId, year, groupId, year, groupId]).then(([rows]) => rows),
         config_1.default.query(`SELECT sc.MatchID, SUM(sc.Result) AS netResult, MAX(sc.HoleID) AS thru
        FROM RyderMatchScore sc
        WHERE sc.RyderYear = ? AND sc.GroupID = ?
@@ -837,6 +845,11 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
     const sessionName = sessionRows[0]?.Name ?? `Session ${sessionId}`;
     const usaPoints = Number(pointsRows[0]?.usaPoints ?? 0);
     const euroPoints = Number(pointsRows[0]?.euroPoints ?? 0);
+    const upcomingMatches = upcomingRows.map((r) => ({
+        matchId: r.MatchID,
+        displayNumber: displayNumbers.get(r.MatchID) ?? r.MatchID,
+        ...(rosters.get(r.MatchID) ?? { usaPlayers: '', euroPlayers: '' }),
+    }));
     const inProgressMatches = progressRows.map((r) => {
         const netResult = Number(r.netResult);
         return {
@@ -855,7 +868,7 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
         winner: r.Winner,
         result: r.Result,
     }));
-    return { sessionId, sessionName, usaPoints, euroPoints, inProgressMatches, completedMatches };
+    return { sessionId, sessionName, usaPoints, euroPoints, upcomingMatches, inProgressMatches, completedMatches };
 }
 /**
  * Get a single match's scorecard — mirrors scorecard2.php.
