@@ -711,7 +711,7 @@ async function getRyderPointsTimeline(year, groupId) {
  * already-completed-at-mount vs. newly-completed diffing, so this just returns the full list.
  */
 async function getRyderCompletedMatches(year, groupId) {
-    const [resultRows] = await config_1.default.query(`SELECT r.MatchID, r.Winner, r.Result, rs.Name AS sessionName
+    const [resultRows] = await config_1.default.query(`SELECT r.MatchID, r.SessionID, r.Winner, r.Result, rs.Name AS sessionName
      FROM RyderMatchResults r
      LEFT JOIN RyderSession rs ON rs.GroupID = r.GroupID AND rs.RyderYear = r.RyderYear AND rs.SessionID = r.SessionID
      WHERE r.RyderYear = ? AND r.GroupID = ?
@@ -721,6 +721,7 @@ async function getRyderCompletedMatches(year, groupId) {
         const roster = rosters.get(r.MatchID) ?? { usaPlayers: '', euroPlayers: '' };
         return {
             matchId: r.MatchID,
+            sessionId: r.SessionID,
             sessionName: r.sessionName ?? '',
             usaPlayers: roster.usaPlayers,
             euroPlayers: roster.euroPlayers,
