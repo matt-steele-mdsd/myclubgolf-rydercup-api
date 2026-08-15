@@ -563,6 +563,24 @@ async function getRyderResults(year, groupId = 1) {
  * Returns null if this year has no matches set up at all yet.
  */
 async function getClinchThresholds(year, groupId) {
+    // `totalMatches` below has to mean the WHOLE event's match count, not just however many
+    // matches happen to be set up so far -- otherwise a session that exists but hasn't had its
+    // matches paired up yet (e.g. tomorrow's Singles, created ahead of time via "Copy sessions
+    // from previous year" but not yet set up) is invisible to the threshold math, so a team can
+    // look mathematically clinched using only the sessions that DO have matches. Confirmed real
+    // (Matt, 2026-08-16): USA got a "won the Cup" celebration mid-event with 2 sessions still to
+    // be set up. So: if ANY session this year has zero matches yet, the Cup can't be clinched,
+    // full stop, regardless of the points math -- resumes automatically once every session has at
+    // least one match (that's just totalMatches becoming the real, complete count again).
+    const [emptySessionRows] = await config_1.default.query(`SELECT COUNT(*) AS emptyCount
+     FROM RyderSession rs
+     WHERE rs.GroupID = ? AND rs.RyderYear = ?
+     AND NOT EXISTS (
+       SELECT 1 FROM RyderMatch rm
+       WHERE rm.GroupID = rs.GroupID AND rm.RyderYear = rs.RyderYear AND rm.SessionID = rs.SessionID
+     )`, [groupId, year]);
+    if (Number(emptySessionRows[0]?.emptyCount ?? 0) > 0)
+        return null;
     const [totalRows] = await config_1.default.query('SELECT COUNT(DISTINCT MatchID) AS total FROM RyderMatch WHERE RyderYear = ? AND GroupID = ?', [year, groupId]);
     const totalMatches = Number(totalRows[0]?.total ?? 0);
     if (totalMatches === 0)
