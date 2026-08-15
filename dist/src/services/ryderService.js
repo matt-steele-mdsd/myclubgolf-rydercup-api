@@ -1212,21 +1212,43 @@ async function clearHoleScore(year, groupId, matchId, holeId) {
 async function unfinalizeMatch(year, groupId, matchId) {
     await config_1.default.query('DELETE FROM RyderMatchResults WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
 }
+/**
+ * `matchScore`/`holesRemaining`/`sessionId` are the client's own snapshot, kept as params for
+ * backward compatibility, but are NOT trusted for the actual write -- both are recomputed here
+ * from the real, currently-saved RyderMatchScore rows (and RyderMatch's own SessionID) instead.
+ *
+ * Confirmed real, Matt 2026-08-16: a match correctly ended up All Square (a forgotten last hole
+ * entered after the round, pulling back a 1-up lead), but multiple people briefly saw a
+ * "Team USA wins" celebration for it instead. The finalize endpoint previously wrote whatever
+ * matchScore/holesRemaining the client sent with zero server-side verification against the real
+ * per-hole data -- any client-side staleness (two people separately fixing the same forgotten
+ * hole around the same time, a correction landing between two overlapping requests, a screen
+ * that hadn't re-fetched yet) could permanently record the wrong winner with nothing to catch
+ * it. Recomputing from the actual saved holes here closes that off entirely: whatever gets
+ * finalized is always what the real hole-by-hole scores say, no matter what the calling client
+ * happened to have in memory.
+ */
 async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, holesRemaining) {
+    const realSessionId = (await getMatchSessionId(year, groupId, matchId)) ?? sessionId;
+    const [sessionRows] = await config_1.default.query('SELECT Holes FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [groupId, year, realSessionId]);
+    const totalHoles = holeNumbersFor((sessionRows[0]?.Holes ?? 'F')).length;
+    const [scoreRows] = await config_1.default.query('SELECT Result FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    const realMatchScore = scoreRows.reduce((sum, r) => sum + Number(r.Result), 0);
+    const realHolesRemaining = Math.max(0, totalHoles - scoreRows.length);
     let winner;
     let points;
     let resultText;
     // A match decided on the very last hole (0 remaining) reads as "N up" in golf, not "N & 0" --
     // "& 0" only makes sense when holes were left unplayed.
-    if (matchScore > 0) {
+    if (realMatchScore > 0) {
         winner = 'U';
         points = 1;
-        resultText = holesRemaining === 0 ? `${matchScore} up` : `${matchScore} & ${holesRemaining}`;
+        resultText = realHolesRemaining === 0 ? `${realMatchScore} up` : `${realMatchScore} & ${realHolesRemaining}`;
     }
-    else if (matchScore < 0) {
+    else if (realMatchScore < 0) {
         winner = 'E';
         points = 1;
-        resultText = holesRemaining === 0 ? `${Math.abs(matchScore)} up` : `${Math.abs(matchScore)} & ${holesRemaining}`;
+        resultText = realHolesRemaining === 0 ? `${Math.abs(realMatchScore)} up` : `${Math.abs(realMatchScore)} & ${realHolesRemaining}`;
     }
     else {
         winner = 'B';
@@ -1235,7 +1257,7 @@ async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, ho
     }
     await config_1.default.query(`INSERT INTO RyderMatchResults (RyderYear, GroupID, MatchID, SessionID, Winner, Points, Result, LastUpdateUser)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE SessionID = ?, Winner = ?, Points = ?, Result = ?`, [year, groupId, matchId, sessionId, winner, points, resultText, SCORER_NAME, sessionId, winner, points, resultText]);
+     ON DUPLICATE KEY UPDATE SessionID = ?, Winner = ?, Points = ?, Result = ?`, [year, groupId, matchId, realSessionId, winner, points, resultText, SCORER_NAME, realSessionId, winner, points, resultText]);
 }
 /**
  * Add a new player to the club roster and put them straight onto the given year's roster
