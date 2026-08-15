@@ -828,7 +828,7 @@ async function getMatchDisplayNumbers(year, groupId) {
  * also scoped to just this session instead of the whole year's matches (see getMatchRosters).
  */
 async function getRyderLeaderboard(year, groupId, sessionId) {
-    const [sessionRows, pointsRows, rosters, displayNumbers, upcomingRows, progressRows, completedRows] = await Promise.all([
+    const [sessionRows, pointsRows, overallPointsRows, rosters, displayNumbers, upcomingRows, progressRows, completedRows] = await Promise.all([
         config_1.default.query('SELECT Name FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [
             groupId,
             year,
@@ -839,6 +839,15 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
          SUM(CASE WHEN Winner IN ('B', 'E') THEN Points ELSE 0 END) AS euroPoints
        FROM RyderMatchResults
        WHERE RyderYear = ? AND GroupID = ? AND SessionID = ?`, [year, groupId, sessionId]).then(([rows]) => rows),
+        // Same shape as pointsRows above, just without the SessionID filter -- the overall Cup
+        // total, so someone watching a live session doesn't have to leave this screen to see where
+        // the Cup itself actually stands. One cheap extra query in the same batch, not a second
+        // round trip (see this screen's own note above about Promise.all and slow connections).
+        config_1.default.query(`SELECT
+         SUM(CASE WHEN Winner IN ('B', 'U') THEN Points ELSE 0 END) AS usaPoints,
+         SUM(CASE WHEN Winner IN ('B', 'E') THEN Points ELSE 0 END) AS euroPoints
+       FROM RyderMatchResults
+       WHERE RyderYear = ? AND GroupID = ?`, [year, groupId]).then(([rows]) => rows),
         getMatchRosters(year, groupId, false, sessionId),
         getMatchDisplayNumbers(year, groupId),
         // Upcoming: scheduled for this session, no hole scored yet, and no recorded result (covers
@@ -864,6 +873,8 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
     const sessionName = sessionRows[0]?.Name ?? `Session ${sessionId}`;
     const usaPoints = Number(pointsRows[0]?.usaPoints ?? 0);
     const euroPoints = Number(pointsRows[0]?.euroPoints ?? 0);
+    const overallUsaPoints = Number(overallPointsRows[0]?.usaPoints ?? 0);
+    const overallEuroPoints = Number(overallPointsRows[0]?.euroPoints ?? 0);
     const upcomingMatches = upcomingRows.map((r) => ({
         matchId: r.MatchID,
         displayNumber: displayNumbers.get(r.MatchID) ?? r.MatchID,
@@ -887,7 +898,7 @@ async function getRyderLeaderboard(year, groupId, sessionId) {
         winner: r.Winner,
         result: r.Result,
     }));
-    return { sessionId, sessionName, usaPoints, euroPoints, upcomingMatches, inProgressMatches, completedMatches };
+    return { sessionId, sessionName, usaPoints, euroPoints, overallUsaPoints, overallEuroPoints, upcomingMatches, inProgressMatches, completedMatches };
 }
 /**
  * Get a single match's scorecard — mirrors scorecard2.php.
@@ -968,21 +979,33 @@ async function getRyderScorecard(year, groupId, matchId) {
                     womenHandicapHoles: options.womenHandicapHoles,
                 });
             }
-            playerScores = tees.players.map((p) => ({
-                playerId: p.playerId,
-                name: p.name,
-                team: p.team,
-                holes: setup.holes.map((h) => {
-                    const g = grossByPlayerHole.get(`${p.playerId}:${h.hole}`);
-                    return {
-                        hole: h.hole,
-                        par: h.par,
-                        gross: g === undefined ? null : g,
-                        strokes: allocation?.get(p.playerId)?.[h.hole] ?? 0,
-                        fullStrokes: fullAllocation?.get(p.playerId)?.[h.hole] ?? 0,
-                    };
-                }),
-            }));
+            const holesFor = (playerId) => setup.holes.map((h) => {
+                const g = grossByPlayerHole.get(`${playerId}:${h.hole}`);
+                return {
+                    hole: h.hole,
+                    par: h.par,
+                    gross: g === undefined ? null : g,
+                    strokes: allocation?.get(playerId)?.[h.hole] ?? 0,
+                    fullStrokes: fullAllocation?.get(playerId)?.[h.hole] ?? 0,
+                };
+            });
+            if (tees.format === 'A') {
+                // Alternate Shot shares one ball per team (see getScoringUnits) -- both partners have the
+                // exact same gross entered under their own PlayerID every hole, so a per-golfer row just
+                // shows the identical numbers twice. One row per TEAM instead, matching the flag-grid
+                // above this table. Either partner's own allocation entry is the real team figure (Alt
+                // Shot's strokes are a single blended team allocation, not personal), so picking the
+                // first team member's is correct, not an arbitrary pick.
+                playerScores = ['U', 'E'].flatMap((team) => {
+                    const rep = tees.players.find((p) => p.team === team);
+                    if (!rep)
+                        return [];
+                    return [{ playerId: rep.playerId, name: team === 'U' ? 'Team USA' : 'Team Euro', team, holes: holesFor(rep.playerId) }];
+                });
+            }
+            else {
+                playerScores = tees.players.map((p) => ({ playerId: p.playerId, name: p.name, team: p.team, holes: holesFor(p.playerId) }));
+            }
         }
     }
     catch {
