@@ -57,6 +57,9 @@ exports.saveHdcp = saveHdcp;
 exports.getHandicapFreezeStatus = getHandicapFreezeStatus;
 exports.freezeHandicaps = freezeHandicaps;
 exports.unfreezeHandicaps = unfreezeHandicaps;
+exports.getEventCancellationStatus = getEventCancellationStatus;
+exports.cancelEvent = cancelEvent;
+exports.uncancelEvent = uncancelEvent;
 exports.getRyderOptions = getRyderOptions;
 exports.saveRyderOptions = saveRyderOptions;
 exports.verifyGroupCaptainPassword = verifyGroupCaptainPassword;
@@ -548,7 +551,18 @@ async function getRyderResults(year, groupId = 1) {
     const thresholds = await getClinchThresholds(year, groupId);
     const usaPointsNeeded = thresholds ? Math.max(0, thresholds.usaThreshold - usaPoints) : null;
     const euroPointsNeeded = thresholds ? Math.max(0, thresholds.euroThreshold - euroPoints) : null;
-    return { usaPoints, euroPoints, usaPointsNeeded, euroPointsNeeded, sessions, usaPlayers, euroPlayers };
+    const cancellation = await getEventCancellationStatus(groupId, year);
+    return {
+        usaPoints,
+        euroPoints,
+        usaPointsNeeded,
+        euroPointsNeeded,
+        sessions,
+        usaPlayers,
+        euroPlayers,
+        cancelled: cancellation.cancelled,
+        cancelledAt: cancellation.cancelledAt,
+    };
 }
 /**
  * The point total each team needs to clinch the Cup this year — shared by getRyderClinchInfo
@@ -1547,6 +1561,20 @@ async function freezeHandicaps(groupId, year, user) {
 async function unfreezeHandicaps(groupId, year) {
     await config_1.default.query('DELETE FROM RyderHandicapFreeze WHERE GroupID = ? AND Year = ?', [groupId, year]);
 }
+async function getEventCancellationStatus(groupId, year) {
+    const [rows] = await config_1.default.query('SELECT CancelledAt FROM RyderEventCancellation WHERE GroupID = ? AND RyderYear = ?', [
+        groupId,
+        year,
+    ]);
+    return { cancelled: rows.length > 0, cancelledAt: rows.length > 0 ? rows[0].CancelledAt : null };
+}
+async function cancelEvent(groupId, year, user) {
+    await config_1.default.query(`INSERT INTO RyderEventCancellation (GroupID, RyderYear, CancelledAt, CancelledByUser) VALUES (?, ?, NOW(), ?)
+     ON DUPLICATE KEY UPDATE CancelledAt = VALUES(CancelledAt), CancelledByUser = VALUES(CancelledByUser)`, [groupId, year, user]);
+}
+async function uncancelEvent(groupId, year) {
+    await config_1.default.query('DELETE FROM RyderEventCancellation WHERE GroupID = ? AND RyderYear = ?', [groupId, year]);
+}
 const DEFAULT_RYDER_OPTIONS = {
     handicapsEnabled: false,
     keepScoreEnabled: false,
@@ -1794,6 +1822,8 @@ async function getResultsHistory(groupId) {
      WHERE GroupID = ?
      GROUP BY RyderYear
      ORDER BY RyderYear DESC`, [groupId]);
+    const [cancelledRows] = await config_1.default.query('SELECT RyderYear FROM RyderEventCancellation WHERE GroupID = ?', [groupId]);
+    const cancelledYears = new Set(cancelledRows.map((r) => r.RyderYear));
     return rows.map((r) => {
         const usaPoints = Number(r.usaPoints);
         const euroPoints = Number(r.euroPoints);
@@ -1801,7 +1831,7 @@ async function getResultsHistory(groupId) {
             year: r.RyderYear,
             usaPoints,
             euroPoints,
-            winner: usaPoints > euroPoints ? 'U' : euroPoints > usaPoints ? 'E' : 'B',
+            winner: cancelledYears.has(r.RyderYear) ? 'M' : usaPoints > euroPoints ? 'U' : euroPoints > usaPoints ? 'E' : 'B',
         };
     });
 }

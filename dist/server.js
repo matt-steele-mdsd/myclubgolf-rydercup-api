@@ -467,6 +467,51 @@ app.delete('/api/ryder/hdcp-freeze', async (req, res) => {
         res.status(500).json({ error: 'Failed to unfreeze handicaps' });
     }
 });
+// Whether this group's year is marked cancelled (Captain -> Event Cancelled submenu)
+app.get('/api/ryder/event-cancellation', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const year = parseInt(req.query.year);
+        if (!year)
+            return res.status(400).json({ error: 'year query param is required' });
+        const status = await (0, ryderService_1.getEventCancellationStatus)(groupId, year);
+        res.json(status);
+    }
+    catch (error) {
+        console.error('Error fetching event cancellation status:', error.message);
+        res.status(500).json({ error: 'Failed to fetch event cancellation status' });
+    }
+});
+// Mark a year cancelled (e.g. rained out) -- Results History / Standings show Mother Nature as
+// the winner instead of computing one from partial points. Underlying match data is untouched.
+app.post('/api/ryder/event-cancellation', async (req, res) => {
+    try {
+        const { groupId, year, user } = req.body;
+        if (!groupId || !year)
+            return res.status(400).json({ error: 'groupId and year are required' });
+        await (0, ryderService_1.cancelEvent)(groupId, year, user || 'app');
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error cancelling event:', error.message);
+        res.status(500).json({ error: 'Failed to cancel event' });
+    }
+});
+// Undo a cancellation (e.g. marked by mistake)
+app.delete('/api/ryder/event-cancellation', async (req, res) => {
+    try {
+        const groupId = parseInt(req.query.group || '1');
+        const year = parseInt(req.query.year);
+        if (!year)
+            return res.status(400).json({ error: 'year query param is required' });
+        await (0, ryderService_1.uncancelEvent)(groupId, year);
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error uncancelling event:', error.message);
+        res.status(500).json({ error: 'Failed to uncancel event' });
+    }
+});
 // Verify a candidate Captains password for one group (Menu -> Captains gate). Blank/never-set
 // counts as "no password required" -- see verifyGroupCaptainPassword. Stateless: the client
 // remembers "verified today" locally (see src/utils/captainAuth.ts), this endpoint just checks
