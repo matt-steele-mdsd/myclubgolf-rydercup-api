@@ -1010,11 +1010,13 @@ async function getRyderScorecard(year, groupId, matchId) {
                 // above this table. Either partner's own allocation entry is the real team figure (Alt
                 // Shot's strokes are a single blended team allocation, not personal), so picking the
                 // first team member's is correct, not an arbitrary pick.
+                const { teamBFlag } = await getRyderOptions(groupId);
+                const teamBName = teamBFlag === 'jester' ? 'Team Jester' : 'Team Euro';
                 playerScores = ['U', 'E'].flatMap((team) => {
                     const rep = tees.players.find((p) => p.team === team);
                     if (!rep)
                         return [];
-                    return [{ playerId: rep.playerId, name: team === 'U' ? 'Team USA' : 'Team Euro', team, holes: holesFor(rep.playerId) }];
+                    return [{ playerId: rep.playerId, name: team === 'U' ? 'Team USA' : teamBName, team, holes: holesFor(rep.playerId) }];
                 });
             }
             else {
@@ -1583,9 +1585,10 @@ const DEFAULT_RYDER_OPTIONS = {
     altShotHighPct: 40,
     nineHoleHalfStrokes: false,
     womenHandicapHoles: true,
+    teamBFlag: 'euro',
 };
 async function getRyderOptions(groupId) {
-    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles, TeamBFlag FROM RyderOptions WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return DEFAULT_RYDER_OPTIONS;
     const r = rows[0];
@@ -1597,13 +1600,14 @@ async function getRyderOptions(groupId) {
         altShotHighPct: r.AltShotHighPct,
         nineHoleHalfStrokes: !!r.NineHoleHalfStrokes,
         womenHandicapHoles: !!r.WomenHandicapHoles,
+        teamBFlag: r.TeamBFlag === 'jester' ? 'jester' : 'euro',
     };
 }
 async function saveRyderOptions(groupId, options) {
-    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles, TeamBFlag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled),
        BestBallLowestHandicap = VALUES(BestBallLowestHandicap), AltShotLowPct = VALUES(AltShotLowPct), AltShotHighPct = VALUES(AltShotHighPct),
-       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes), WomenHandicapHoles = VALUES(WomenHandicapHoles)`, [
+       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes), WomenHandicapHoles = VALUES(WomenHandicapHoles), TeamBFlag = VALUES(TeamBFlag)`, [
         groupId,
         options.handicapsEnabled ? 1 : 0,
         options.keepScoreEnabled ? 1 : 0,
@@ -1613,6 +1617,7 @@ async function saveRyderOptions(groupId, options) {
         options.altShotHighPct,
         options.nineHoleHalfStrokes ? 1 : 0,
         options.womenHandicapHoles ? 1 : 0,
+        options.teamBFlag === 'jester' ? 'jester' : 'euro',
     ]);
 }
 /**

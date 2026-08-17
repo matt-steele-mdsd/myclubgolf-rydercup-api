@@ -634,13 +634,16 @@ app.post('/api/ryder/options', async (req, res) => {
     try {
         // womenHandicapHoles defaults to true when the request omits it -- so an older client that
         // doesn't know the field can't silently turn women's handicap holes off on save.
-        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes, womenHandicapHoles = true } = req.body;
+        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes, womenHandicapHoles = true, teamBFlag = 'euro', } = req.body;
         if (!groupId)
             return res.status(400).json({ error: 'groupId is required' });
         const lowPct = altShotLowPct ?? 60;
         const highPct = altShotHighPct ?? 40;
         if (!Number.isInteger(lowPct) || !Number.isInteger(highPct) || lowPct < 0 || highPct < 0 || lowPct + highPct !== 100) {
             return res.status(400).json({ error: 'altShotLowPct and altShotHighPct must be whole numbers that sum to 100' });
+        }
+        if (teamBFlag !== 'euro' && teamBFlag !== 'jester') {
+            return res.status(400).json({ error: "teamBFlag must be 'euro' or 'jester'" });
         }
         await (0, ryderService_1.saveRyderOptions)(groupId, {
             handicapsEnabled: !!handicapsEnabled,
@@ -650,6 +653,7 @@ app.post('/api/ryder/options', async (req, res) => {
             altShotHighPct: highPct,
             nineHoleHalfStrokes: !!nineHoleHalfStrokes,
             womenHandicapHoles: !!womenHandicapHoles,
+            teamBFlag,
         });
         res.json({ status: 'ok' });
     }
