@@ -298,8 +298,8 @@ app.post('/api/ryder/sessions', async (req, res) => {
         if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
             return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
         }
-        if (format !== undefined && format !== null && !['B', 'A', 'O'].includes(format)) {
-            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), or O (Other)' });
+        if (format !== undefined && format !== null && !['B', 'A', 'C', 'O'].includes(format)) {
+            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), C (Scramble), or O (Other)' });
         }
         if (scoringMethod !== undefined && scoringMethod !== null && !['M', 'S'].includes(scoringMethod)) {
             return res.status(400).json({ error: 'scoringMethod must be M (Match Play) or S (Total Score)' });
@@ -322,8 +322,8 @@ app.put('/api/ryder/sessions', async (req, res) => {
         if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
             return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
         }
-        if (format !== undefined && format !== null && !['B', 'A', 'O'].includes(format)) {
-            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), or O (Other)' });
+        if (format !== undefined && format !== null && !['B', 'A', 'C', 'O'].includes(format)) {
+            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), C (Scramble), or O (Other)' });
         }
         if (scoringMethod !== undefined && scoringMethod !== null && !['M', 'S'].includes(scoringMethod)) {
             return res.status(400).json({ error: 'scoringMethod must be M (Match Play) or S (Total Score)' });

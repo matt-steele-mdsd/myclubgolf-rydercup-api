@@ -22,6 +22,7 @@ exports.computeMatchStrokes = computeMatchStrokes;
 exports.computeHandicapStrokesPerPlayer = computeHandicapStrokesPerPlayer;
 exports.buildStrokeSummaryLines = buildStrokeSummaryLines;
 exports.getScoringUnits = getScoringUnits;
+exports.computeTeamBestNet = computeTeamBestNet;
 exports.computeHoleWinnerFromScores = computeHoleWinnerFromScores;
 /**
  * A side's (player's or team's) Course Handicap, adjusted for a Front-9/Back-9 session.
@@ -69,7 +70,10 @@ function computeMatchStrokes(input) {
         return allocation;
     };
     const result = new Map();
-    if (format === 'O') {
+    if (format === 'O' || format === 'C') {
+        // Scramble ('C') has no defined stroke-allocation rule either (house rules for scramble
+        // handicap allowances vary too much to pick one) -- treated like 'O': zero strokes for
+        // everyone, same as Other, until a real rule is asked for.
         for (const p of players)
             result.set(p.playerId, emptyAllocation());
         return result;
@@ -159,7 +163,7 @@ function joinNames(names) {
     return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
 }
 function buildStrokeSummaryLines(allocation, players, format) {
-    if (format === 'O' || players.length === 0)
+    if (format === 'O' || format === 'C' || players.length === 0)
         return [];
     const holesList = (playerId) => Object.entries(allocation.get(playerId) ?? {})
         .map(([h, s]) => ({ hole: Number(h), strokes: s }))
@@ -228,7 +232,7 @@ function buildStrokeSummaryLines(allocation, players, format) {
     return lines;
 }
 function getScoringUnits(players, format) {
-    if (format === 'A') {
+    if (format === 'A' || format === 'C') {
         const units = [];
         for (const team of ['U', 'E']) {
             const teamPlayers = players.filter((p) => p.team === team);
@@ -246,31 +250,36 @@ function getScoringUnits(players, format) {
     return players.map((p) => ({ key: `player-${p.playerId}`, label: p.name, team: p.team, playerIds: [p.playerId] }));
 }
 /**
- * Work out which team won a hole from entered gross scores -- each team's hole score is its
- * best (lowest) net among its units (for Better Ball/Other/Singles, "best of its players"; for
- * Alternate Shot, trivially its one shared team score), net = gross - strokes on that hole
- * (0 if Handicaps is off, or always for an 'O' session). Returns null if any unit on either side
- * hasn't entered a score for this hole yet -- the caller should treat that as "not decided yet",
- * not as a halved hole.
+ * A team's best (lowest) net score for one hole among its scoring units (for Better Ball/Other/
+ * Singles, "best of its players"; for Alternate Shot, trivially its one shared team score),
+ * net = gross - strokes on that hole (0 if Handicaps is off, or always for an 'O' session).
+ * Returns null if any unit on this side hasn't entered a score for this hole yet. Shared by
+ * `computeHoleWinnerFromScores` (match play, per hole) and stroke-play finalize (server-side,
+ * summed across every hole) -- see `finalizeStrokePlayMatch` in ryderService.ts.
+ */
+function computeTeamBestNet(units, team, grossScores, strokesThisHole) {
+    const teamUnits = units.filter((u) => u.team === team);
+    if (teamUnits.length === 0)
+        return null;
+    const nets = teamUnits.map((u) => {
+        const gross = grossScores[u.playerIds[0]];
+        if (gross === undefined)
+            return null;
+        const strokes = strokesThisHole[u.playerIds[0]] ?? 0;
+        return gross - strokes;
+    });
+    if (nets.some((n) => n === null))
+        return null;
+    return Math.min(...nets);
+}
+/**
+ * Work out which team won a hole from entered gross scores -- returns null if either side hasn't
+ * entered a score for this hole yet, the caller should treat that as "not decided yet", not as a
+ * halved hole.
  */
 function computeHoleWinnerFromScores(units, grossScores, strokesThisHole) {
-    const teamBestNet = (team) => {
-        const teamUnits = units.filter((u) => u.team === team);
-        if (teamUnits.length === 0)
-            return null;
-        const nets = teamUnits.map((u) => {
-            const gross = grossScores[u.playerIds[0]];
-            if (gross === undefined)
-                return null;
-            const strokes = strokesThisHole[u.playerIds[0]] ?? 0;
-            return gross - strokes;
-        });
-        if (nets.some((n) => n === null))
-            return null;
-        return Math.min(...nets);
-    };
-    const uNet = teamBestNet('U');
-    const eNet = teamBestNet('E');
+    const uNet = computeTeamBestNet(units, 'U', grossScores, strokesThisHole);
+    const eNet = computeTeamBestNet(units, 'E', grossScores, strokesThisHole);
     if (uNet === null || eNet === null)
         return null;
     if (uNet < eNet)

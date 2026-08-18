@@ -41,6 +41,7 @@ exports.saveHoleScore = saveHoleScore;
 exports.clearHoleScore = clearHoleScore;
 exports.unfinalizeMatch = unfinalizeMatch;
 exports.saveMatchResult = saveMatchResult;
+exports.finalizeStrokePlayMatch = finalizeStrokePlayMatch;
 exports.addPlayer = addPlayer;
 exports.getPlayersForGroup = getPlayersForGroup;
 exports.getPlayerRoster = getPlayerRoster;
@@ -1006,13 +1007,13 @@ async function getRyderScorecard(year, groupId, matchId) {
                     fullStrokes: fullAllocation?.get(playerId)?.[h.hole] ?? 0,
                 };
             });
-            if (tees.format === 'A') {
-                // Alternate Shot shares one ball per team (see getScoringUnits) -- both partners have the
-                // exact same gross entered under their own PlayerID every hole, so a per-golfer row just
-                // shows the identical numbers twice. One row per TEAM instead, matching the flag-grid
-                // above this table. Either partner's own allocation entry is the real team figure (Alt
-                // Shot's strokes are a single blended team allocation, not personal), so picking the
-                // first team member's is correct, not an arbitrary pick.
+            if (tees.format === 'A' || tees.format === 'C') {
+                // Alternate Shot and Scramble both share one ball per team (see getScoringUnits) -- every
+                // teammate has the exact same gross entered under their own PlayerID every hole, so a
+                // per-golfer row just shows the identical numbers twice (or more). One row per TEAM
+                // instead, matching the flag-grid above this table. Any one team member's own allocation
+                // entry is the real team figure, so picking the first one found is correct, not an
+                // arbitrary pick.
                 const { teamAFlag, teamBFlag } = await getRyderOptions(groupId);
                 const teamAName = teamAFlag === 'crown' ? 'Team Crown' : 'Team USA';
                 const teamBName = teamBFlag === 'jester' ? 'Team Jester' : 'Team Euro';
@@ -1127,8 +1128,9 @@ async function getMatchSetup(year, groupId, matchId) {
     if (matchRows.length === 0)
         return null;
     const sessionId = (await getMatchSessionId(year, groupId, matchId)) ?? 1;
-    const [sessionRows] = await config_1.default.query('SELECT Holes FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [groupId, year, sessionId]);
+    const [sessionRows] = await config_1.default.query('SELECT Holes, ScoringMethod FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [groupId, year, sessionId]);
     const holesSetting = (sessionRows[0]?.Holes ?? 'F');
+    const scoringMethod = (sessionRows[0]?.ScoringMethod === 'S' ? 'S' : 'M');
     const usaPlayers = matchRows.filter((r) => r.Team === 'U').map((r) => r.name).join(' & ');
     const euroPlayers = matchRows.filter((r) => r.Team === 'E').map((r) => r.name).join(' & ');
     const holeNumbers = holeNumbersFor(holesSetting);
@@ -1165,6 +1167,7 @@ async function getMatchSetup(year, groupId, matchId) {
         matchId,
         displayNumber: displayNumbers.get(matchId) ?? matchId,
         sessionId,
+        scoringMethod,
         usaPlayers,
         euroPlayers,
         holes,
@@ -1302,6 +1305,70 @@ async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, ho
     await config_1.default.query(`INSERT INTO RyderMatchResults (RyderYear, GroupID, MatchID, SessionID, Winner, Points, Result, LastUpdateUser)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE SessionID = ?, Winner = ?, Points = ?, Result = ?`, [year, groupId, matchId, realSessionId, winner, points, resultText, SCORER_NAME, realSessionId, winner, points, resultText]);
+}
+/**
+ * Finalize a Total Score (stroke play) match -- sums each team's best-ball net total across
+ * every hole (same "lowest net among the team's scoring units" math match play uses per hole,
+ * see computeTeamBestNet in strokeAllocation.ts, just summed instead of compared-and-flagged
+ * hole by hole) and writes the outcome into the exact same RyderMatchResults columns
+ * saveMatchResult uses for match play, so session points/clinch/leaderboard/player stats need no
+ * changes at all -- they already read Winner/Points generically. Recomputes everything itself
+ * from the real saved RyderMatchPlayerScore/tee data server-side rather than trusting a client
+ * total, same reasoning as saveMatchResult's own doc comment.
+ */
+async function finalizeStrokePlayMatch(year, groupId, matchId, user) {
+    const [tees, options, setup] = await Promise.all([
+        getMatchPlayerTees(year, groupId, matchId),
+        getRyderOptions(groupId),
+        getMatchSetup(year, groupId, matchId),
+    ]);
+    if (!tees || !setup)
+        return { ok: false, error: 'Match not found.' };
+    const [grossRows] = await config_1.default.query('SELECT PlayerID, HoleID, Score FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    const grossByPlayerHole = new Map();
+    for (const r of grossRows)
+        grossByPlayerHole.set(`${r.PlayerID}:${r.HoleID}`, r.Score);
+    const scoringUnits = (0, strokeAllocation_1.getScoringUnits)(tees.players.map((p) => ({ playerId: p.playerId, name: p.name, team: p.team })), tees.format);
+    let allocation = null;
+    if (options.handicapsEnabled && tees.players.every((p) => p.courseHandicap !== null)) {
+        const strokeHoles = setup.holes.map((h) => ({ hole: h.hole, hdcp: h.hdcp, hdcpMale: h.hdcpMale, hdcpFemale: h.hdcpFemale }));
+        allocation = (0, strokeAllocation_1.computeMatchStrokes)({
+            players: tees.players.map((p) => ({ playerId: p.playerId, team: p.team, courseHandicap: p.courseHandicap, gender: p.gender })),
+            format: tees.format,
+            holes: strokeHoles,
+            altShotLowPct: options.altShotLowPct,
+            altShotHighPct: options.altShotHighPct,
+            nineHoleHalfStrokes: options.nineHoleHalfStrokes,
+            womenHandicapHoles: options.womenHandicapHoles,
+        });
+    }
+    let usaTotal = 0;
+    let euroTotal = 0;
+    for (const h of setup.holes) {
+        const grossScores = {};
+        for (const p of tees.players) {
+            const g = grossByPlayerHole.get(`${p.playerId}:${h.hole}`);
+            if (g !== undefined)
+                grossScores[p.playerId] = g;
+        }
+        const strokesThisHole = {};
+        for (const p of tees.players)
+            strokesThisHole[p.playerId] = allocation?.get(p.playerId)?.[h.hole] ?? 0;
+        const uNet = (0, strokeAllocation_1.computeTeamBestNet)(scoringUnits, 'U', grossScores, strokesThisHole);
+        const eNet = (0, strokeAllocation_1.computeTeamBestNet)(scoringUnits, 'E', grossScores, strokesThisHole);
+        if (uNet === null || eNet === null) {
+            return { ok: false, error: `Hole ${h.hole} hasn't been fully scored yet.` };
+        }
+        usaTotal += uNet;
+        euroTotal += eNet;
+    }
+    const winner = usaTotal < euroTotal ? 'U' : euroTotal < usaTotal ? 'E' : 'B';
+    const points = winner === 'B' ? 0.5 : 1;
+    const resultText = `${usaTotal}-${euroTotal}`;
+    await config_1.default.query(`INSERT INTO RyderMatchResults (RyderYear, GroupID, MatchID, SessionID, Winner, Points, Result, LastUpdateUser)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE SessionID = ?, Winner = ?, Points = ?, Result = ?`, [year, groupId, matchId, setup.sessionId, winner, points, resultText, user, setup.sessionId, winner, points, resultText]);
+    return { ok: true };
 }
 /**
  * Add a new player to the club roster and put them straight onto the given year's roster
