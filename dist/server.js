@@ -291,7 +291,7 @@ app.post('/api/ryder/sessions/copy', async (req, res) => {
 // Create a new session for a year/group (Admin -> Setup Sessions "+ Add Session")
 app.post('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, name, type, holes, teamSize, format, courseId } = req.body;
+        const { year, group, name, type, holes, teamSize, format, courseId, scoringMethod } = req.body;
         if (!year || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, name, type (T or I), and holes (F, B, or A) are required' });
         }
@@ -301,7 +301,10 @@ app.post('/api/ryder/sessions', async (req, res) => {
         if (format !== undefined && format !== null && !['B', 'A', 'O'].includes(format)) {
             return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), or O (Other)' });
         }
-        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes, teamSize ?? null, format ?? null, courseId ?? null);
+        if (scoringMethod !== undefined && scoringMethod !== null && !['M', 'S'].includes(scoringMethod)) {
+            return res.status(400).json({ error: 'scoringMethod must be M (Match Play) or S (Total Score)' });
+        }
+        const session = await (0, ryderService_1.createSession)(group || 1, year, name, type, holes, teamSize ?? null, format ?? null, courseId ?? null, scoringMethod ?? 'M');
         res.json(session);
     }
     catch (error) {
@@ -312,7 +315,7 @@ app.post('/api/ryder/sessions', async (req, res) => {
 // Edit a session's name/type/holes/format (Admin -> Setup Sessions pencil icon)
 app.put('/api/ryder/sessions', async (req, res) => {
     try {
-        const { year, group, session, name, type, holes, teamSize, format, courseId } = req.body;
+        const { year, group, session, name, type, holes, teamSize, format, courseId, scoringMethod } = req.body;
         if (!year || !session || !name || (type !== 'T' && type !== 'I') || !['F', 'B', 'A'].includes(holes)) {
             return res.status(400).json({ error: 'year, session, name, type (T or I), and holes (F, B, or A) are required' });
         }
@@ -322,7 +325,10 @@ app.put('/api/ryder/sessions', async (req, res) => {
         if (format !== undefined && format !== null && !['B', 'A', 'O'].includes(format)) {
             return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), or O (Other)' });
         }
-        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes, teamSize ?? null, format ?? null, courseId ?? null);
+        if (scoringMethod !== undefined && scoringMethod !== null && !['M', 'S'].includes(scoringMethod)) {
+            return res.status(400).json({ error: 'scoringMethod must be M (Match Play) or S (Total Score)' });
+        }
+        await (0, ryderService_1.updateSession)(group || 1, year, session, name, type, holes, teamSize ?? null, format ?? null, courseId ?? null, scoringMethod ?? 'M');
         res.json({ status: 'ok' });
     }
     catch (error) {

@@ -335,7 +335,7 @@ async function getEventCourseHistory(groupId) {
  * why). `matchCount` is how many distinct matches exist in that session so far.
  */
 async function getSessionsForYear(groupId, year) {
-    const [rows] = await config_1.default.query(`SELECT rs.SessionID, rs.Name, rs.Type, rs.TeamSize, rs.Format, rs.Holes, rs.CourseID, c.CourseName,
+    const [rows] = await config_1.default.query(`SELECT rs.SessionID, rs.Name, rs.Type, rs.TeamSize, rs.Format, rs.ScoringMethod, rs.Holes, rs.CourseID, c.CourseName,
        (SELECT COUNT(DISTINCT rm.MatchID) FROM RyderMatch rm
         WHERE rm.RyderYear = rs.RyderYear AND rm.GroupID = rs.GroupID AND rm.SessionID = rs.SessionID) AS matchCount,
        (SELECT COUNT(DISTINCT rmr.MatchID) FROM RyderMatchResults rmr
@@ -355,6 +355,7 @@ async function getSessionsForYear(groupId, year) {
         type: r.Type,
         teamSize: r.TeamSize,
         format: r.Format,
+        scoringMethod: r.ScoringMethod,
         holes: r.Holes,
         courseId: r.CourseID,
         courseName: r.CourseName,
@@ -392,10 +393,10 @@ async function copyPreviousYearSessions(groupId, targetYear) {
     const summary = await getPreviousSessionSummary(groupId, targetYear);
     if (!summary)
         return [];
-    const [srcRows] = await config_1.default.query('SELECT Name, Type, TeamSize, Format, Holes, CourseID FROM RyderSession WHERE GroupID = ? AND RyderYear = ? ORDER BY SessionID', [groupId, summary.fromYear]);
+    const [srcRows] = await config_1.default.query('SELECT Name, Type, TeamSize, Format, ScoringMethod, Holes, CourseID FROM RyderSession WHERE GroupID = ? AND RyderYear = ? ORDER BY SessionID', [groupId, summary.fromYear]);
     const created = [];
     for (const src of srcRows) {
-        created.push(await createSession(groupId, targetYear, src.Name, src.Type, src.Holes, src.TeamSize, src.Format, src.CourseID));
+        created.push(await createSession(groupId, targetYear, src.Name, src.Type, src.Holes, src.TeamSize, src.Format, src.CourseID, src.ScoringMethod));
     }
     return created;
 }
@@ -413,19 +414,20 @@ async function copyPreviousYearSessions(groupId, targetYear) {
  * `courseId` is null unless this session is played somewhere other than the event's default
  * course for the year.
  */
-async function createSession(groupId, year, name, type, holes, teamSize, format, courseId) {
+async function createSession(groupId, year, name, type, holes, teamSize, format, courseId, scoringMethod = 'M') {
     const [rows] = await config_1.default.query('SELECT COALESCE(MAX(SessionID), 0) + 1 AS nextId FROM RyderSession WHERE GroupID = ? AND RyderYear = ?', [groupId, year]);
     const sessionId = rows[0].nextId;
     const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
     const resolvedFormat = type === 'T' ? (format ?? 'O') : null;
-    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Format, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, resolvedFormat, holes, courseId, SCORER_NAME]);
+    const resolvedScoringMethod = type === 'T' ? (scoringMethod ?? 'M') : null;
+    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Format, ScoringMethod, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, resolvedFormat, resolvedScoringMethod ?? 'M', holes, courseId, SCORER_NAME]);
     let courseName = null;
     if (courseId !== null) {
         const [courseRows] = await config_1.default.query('SELECT CourseName FROM Course WHERE CourseID = ?', [courseId]);
         courseName = courseRows[0]?.CourseName ?? null;
     }
     return {
-        sessionId, name, type, teamSize: resolvedTeamSize, format: resolvedFormat, holes, courseId, courseName,
+        sessionId, name, type, teamSize: resolvedTeamSize, format: resolvedFormat, scoringMethod: resolvedScoringMethod, holes, courseId, courseName,
         matchCount: 0, completedCount: 0, hasScores: false,
     };
 }
@@ -435,10 +437,11 @@ async function createSession(groupId, year, name, type, holes, teamSize, format,
  * matches already exist in it. Existing matches keep their players/course; only the session's
  * own definition changes.
  */
-async function updateSession(groupId, year, sessionId, name, type, holes, teamSize, format, courseId) {
+async function updateSession(groupId, year, sessionId, name, type, holes, teamSize, format, courseId, scoringMethod = 'M') {
     const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
     const resolvedFormat = type === 'T' ? (format ?? 'O') : null;
-    await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, TeamSize = ?, Format = ?, Holes = ?, CourseID = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, resolvedTeamSize, resolvedFormat, holes, courseId, SCORER_NAME, groupId, year, sessionId]);
+    const resolvedScoringMethod = type === 'T' ? (scoringMethod ?? 'M') : 'M';
+    await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, TeamSize = ?, Format = ?, ScoringMethod = ?, Holes = ?, CourseID = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, resolvedTeamSize, resolvedFormat, resolvedScoringMethod, holes, courseId, SCORER_NAME, groupId, year, sessionId]);
 }
 /**
  * Delete a session and every match in it (plus that match's hole scores/results) — a session
