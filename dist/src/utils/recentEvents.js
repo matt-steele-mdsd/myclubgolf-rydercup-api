@@ -17,7 +17,10 @@ async function getRecentEvents() {
         const raw = await async_storage_1.default.getItem(STORAGE_KEY);
         if (!raw)
             return [];
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        // Filters out the hidden master group even if it was already saved before addRecentEvent
+        // learned to skip it -- self-heals any device that opened it while testing.
+        return parsed.filter((e) => e.eventName.trim().toLowerCase() !== 'mdsd');
     }
     catch (error) {
         console.error('Error reading recent events:', error);

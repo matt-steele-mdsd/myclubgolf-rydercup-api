@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.deleteRyderGroup = exports.getAllGroupsSummary = exports.searchAllGroupsForMaster = exports.setGroupCaptainPassword = exports.getGroupCaptainPasswordStatus = exports.verifyCaptainPassword = exports.saveMatchHoleScores = exports.getMatchHoleScores = exports.unlinkMatch = exports.saveMatchLink = exports.getMatchLink = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getRyderClinchInfo = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
-exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = void 0;
+exports.saveHoleScore = exports.saveMatchPairing = exports.getMatchPairing = exports.deleteRyderGroup = exports.getAllGroupsSummary = exports.searchAllGroupsForMaster = exports.setGroupCaptainPassword = exports.getGroupCaptainPasswordValue = exports.getGroupCaptainPasswordStatus = exports.verifyCaptainPassword = exports.saveMatchHoleScores = exports.getMatchAllHoleScores = exports.getMatchHoleScores = exports.unlinkMatch = exports.saveMatchLink = exports.getMatchLink = exports.saveMatchPlayerTee = exports.getMatchPlayerTees = exports.getPlayerCourseHandicaps = exports.saveRyderOptions = exports.getRyderOptions = exports.uncancelEvent = exports.cancelEvent = exports.getEventCancellationStatus = exports.unfreezeHandicaps = exports.freezeHandicaps = exports.getHandicapFreezeStatus = exports.saveHdcp = exports.getLatestHdcp = exports.getActiveRosterForSetup = exports.getSittingOutForSession = exports.deleteMatch = exports.deleteSession = exports.updateSession = exports.createSession = exports.getSessionsForYear = exports.copyPreviousYearSessions = exports.getPreviousSessionSummary = exports.getMatchSetup = exports.getSessionMatches = exports.getRyderScorecard = exports.getRyderLeaderboard = exports.getRyderCompletedMatches = exports.getRyderPointsTimeline = exports.getClinchStatus = exports.getRyderResults = exports.getRosterStatus = exports.getSetupStatus = exports.getRyderGroups = exports.getRyderYears = void 0;
+exports.getLastGhinRefresh = exports.refreshGhinHandicaps = exports.getEasyGhinLinks = exports.linkPlayerGhin = exports.searchGhin = exports.setPlayerGhinSkip = exports.getGhinPlayerList = exports.getSinglesHistory = exports.getTeamsHistory = exports.getPlayerRanking = exports.getResultsHistory = exports.getGhinCourseDetail = exports.searchGhinCourses = exports.createCourse = exports.getEventCourseHistory = exports.setEventCourse = exports.getEventCourse = exports.getCourseList = exports.renameRyderEvent = exports.createRyderEvent = exports.getRyderEventById = exports.searchRyderEvents = exports.setPlayerRetired = exports.setRosterMembership = exports.updatePlayerDetails = exports.getPlayerRoster = exports.getPlayersForGroup = exports.addPlayer = exports.unfinalizeMatch = exports.finalizeStrokePlayMatch = exports.finalizeMatch = exports.clearMatchOpened = exports.markMatchOpened = exports.hasLiveActivity = exports.clearHoleScore = void 0;
 exports.pickCurrentSession = pickCurrentSession;
 // Production API URL - always use this for built apps. To test a local backend change,
 // temporarily point this at http://localhost:3000/api and revert before committing (see
@@ -91,24 +91,25 @@ const getRyderResults = async (year, groupId) => {
     }
 };
 exports.getRyderResults = getRyderResults;
-/** Which team (if any) has clinched the Cup outright this year, and the specific match that did
- * it. Null when it hasn't been decided yet. */
-const getRyderClinchInfo = async (year, groupId) => {
+/** Clinch status for the every-30s poller: whether a clinch is possible yet (cheap COUNT gate on
+ * the server) plus the clinch payload once it happens. Returns null only on a network error. */
+const getClinchStatus = async (year, groupId) => {
     try {
-        const response = await fetch(`${API_URL}/ryder/clinch?year=${year}&group=${groupId}`);
+        const response = await fetch(`${API_URL}/ryder/clinch-status?year=${year}&group=${groupId}`);
         if (!response.ok)
             return null;
         return (await response.json());
     }
     catch (error) {
-        console.error('Error fetching Ryder clinch info:', error);
+        console.error('Error fetching Ryder clinch status:', error);
         return null;
     }
 };
-exports.getRyderClinchInfo = getRyderClinchInfo;
+exports.getClinchStatus = getClinchStatus;
 /** Running point totals over time (one entry per completed match, in the order results were
  * recorded) plus the winning-line thresholds, for the collapsible points-progression chart on
- * Standings. Null when this year has no matches set up yet. */
+ * Standings. The response itself is only null here on a genuine fetch failure -- the server
+ * always returns a real object (points progression + possibly-null thresholds) otherwise. */
 const getRyderPointsTimeline = async (year, groupId) => {
     try {
         const response = await fetch(`${API_URL}/ryder/points-timeline?year=${year}&group=${groupId}`);
@@ -201,15 +202,60 @@ const getMatchSetup = async (year, groupId, matchId) => {
     }
 };
 exports.getMatchSetup = getMatchSetup;
-/** The session someone tapping "Leaderboard" most likely wants to land on: the first one that
- * isn't fully wrapped up yet (in progress, or set up but not started). If every session is
- * complete, falls back to the last one so it shows final results instead of session 1. */
+/** The session someone tapping "Leaderboard" most likely wants to land on. Prefers the last
+ * session that actually has scores recorded (in progress or done) over an earlier session
+ * that's technically "not done" only because its matches were never paired up -- e.g. once
+ * Session 2 has live scores, landing back on an empty Session 1 (0 matches set up yet) is the
+ * wrong default, even though Session 1 also counts as "not done" by that measure alone. Falls
+ * back to the first not-fully-wrapped-up session when nothing has scores yet (event hasn't
+ * started), and to the last session overall if every session is complete. */
 function pickCurrentSession(sessions) {
+    const lastScored = [...sessions].reverse().find((s) => s.hasScores || s.completedCount > 0);
+    if (lastScored)
+        return lastScored.sessionId;
     const notDone = sessions.find((s) => s.matchCount === 0 || s.completedCount < s.matchCount);
     if (notDone)
         return notDone.sessionId;
     return sessions[sessions.length - 1]?.sessionId ?? 0;
 }
+/**
+ * Summary of the most recent prior year with sessions, for the "Copy sessions from previous
+ * year" shortcut on Setup Sessions. Returns null when there's nothing to copy.
+ */
+const getPreviousSessionSummary = async (year, groupId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/sessions/previous?year=${year}&group=${groupId}`);
+        if (!response.ok)
+            return null;
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching previous-session summary:', error);
+        return null;
+    }
+};
+exports.getPreviousSessionSummary = getPreviousSessionSummary;
+/**
+ * Copy last year's session definitions into a year via the API server (Setup Sessions "Copy
+ * sessions" callout). Returns the newly created sessions, or [] on failure.
+ */
+const copyPreviousYearSessions = async (year, groupId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/sessions/copy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId }),
+        });
+        if (!response.ok)
+            return [];
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error copying sessions:', error);
+        return [];
+    }
+};
+exports.copyPreviousYearSessions = copyPreviousYearSessions;
 /**
  * Get every session defined for a year via the API server.
  */
@@ -229,12 +275,12 @@ exports.getSessionsForYear = getSessionsForYear;
 /**
  * Create a new session for a year via the API server (Setup Sessions -> Add Session).
  */
-const createSession = async (year, groupId, name, type, holes, teamSize, format, courseId) => {
+const createSession = async (year, groupId, name, type, holes, teamSize, format, courseId, scoringMethod = 'M') => {
     try {
         const response = await fetch(`${API_URL}/ryder/sessions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ year, group: groupId, name, type, holes, teamSize, format, courseId }),
+            body: JSON.stringify({ year, group: groupId, name, type, holes, teamSize, format, courseId, scoringMethod }),
         });
         if (!response.ok)
             return null;
@@ -250,12 +296,12 @@ exports.createSession = createSession;
  * Edit a session's name/type/holes/course via the API server (Admin -> Setup Sessions pencil
  * icon).
  */
-const updateSession = async (year, groupId, sessionId, name, type, holes, teamSize, format, courseId) => {
+const updateSession = async (year, groupId, sessionId, name, type, holes, teamSize, format, courseId, scoringMethod = 'M') => {
     try {
         const response = await fetch(`${API_URL}/ryder/sessions`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ year, group: groupId, session: sessionId, name, type, holes, teamSize, format, courseId }),
+            body: JSON.stringify({ year, group: groupId, session: sessionId, name, type, holes, teamSize, format, courseId, scoringMethod }),
         });
         return response.ok;
     }
@@ -418,6 +464,57 @@ const unfreezeHandicaps = async (groupId, year) => {
     }
 };
 exports.unfreezeHandicaps = unfreezeHandicaps;
+/**
+ * Get whether this group's year is marked cancelled (e.g. rained out).
+ */
+const getEventCancellationStatus = async (groupId, year) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/event-cancellation?group=${groupId}&year=${year}`);
+        if (!response.ok)
+            return { cancelled: false, cancelledAt: null };
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching event cancellation status:', error);
+        return { cancelled: false, cancelledAt: null };
+    }
+};
+exports.getEventCancellationStatus = getEventCancellationStatus;
+/**
+ * Mark this group's year cancelled -- Results History / Standings will show Mother Nature as the
+ * winner instead of computing one from partial points. Underlying match data is untouched.
+ */
+const cancelEvent = async (groupId, year, user) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/event-cancellation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ groupId, year, user }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error cancelling event:', error);
+        return false;
+    }
+};
+exports.cancelEvent = cancelEvent;
+/**
+ * Undo a cancellation (e.g. marked by mistake).
+ */
+const uncancelEvent = async (groupId, year) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/event-cancellation?group=${groupId}&year=${year}`, {
+            method: 'DELETE',
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error uncancelling event:', error);
+        return false;
+    }
+};
+exports.uncancelEvent = uncancelEvent;
 const DEFAULT_RYDER_OPTIONS = {
     handicapsEnabled: false,
     keepScoreEnabled: false,
@@ -425,6 +522,10 @@ const DEFAULT_RYDER_OPTIONS = {
     altShotLowPct: 60,
     altShotHighPct: 40,
     nineHoleHalfStrokes: false,
+    womenHandicapHoles: true,
+    playAllHoles: false,
+    teamAFlag: 'usa',
+    teamBFlag: 'euro',
 };
 /**
  * Get this event's Captain options. Fails open to the same defaults the server uses for a
@@ -569,6 +670,21 @@ const getMatchHoleScores = async (year, groupId, matchId, hole) => {
     }
 };
 exports.getMatchHoleScores = getMatchHoleScores;
+/** Every hole's gross scores in one request -- holeNumber -> playerId -> score. Total Score
+ * (stroke play) matches use this for a running/final total instead of one request per hole. */
+const getMatchAllHoleScores = async (year, groupId, matchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/match-all-hole-scores?year=${year}&group=${groupId}&match=${matchId}`);
+        if (!response.ok)
+            return {};
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching all match hole scores:', error);
+        return {};
+    }
+};
+exports.getMatchAllHoleScores = getMatchAllHoleScores;
 /** Save every player's gross score for one hole in one go (Keep Score mode). */
 const saveMatchHoleScores = async (year, groupId, matchId, hole, scores) => {
     try {
@@ -624,6 +740,21 @@ const getGroupCaptainPasswordStatus = async (groupId) => {
     }
 };
 exports.getGroupCaptainPasswordStatus = getGroupCaptainPasswordStatus;
+/** Master Tools only: the actual Captain password value (not just whether one is set), so a
+ * captain who forgot it can be reminded without resetting/changing it. */
+const getGroupCaptainPasswordValue = async (groupId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/master/captain-password?group=${groupId}`);
+        if (!response.ok)
+            return { password: null };
+        return (await response.json());
+    }
+    catch (error) {
+        console.error('Error fetching captain password value:', error);
+        return { password: null };
+    }
+};
+exports.getGroupCaptainPasswordValue = getGroupCaptainPasswordValue;
 /** Set (or, passing null, clear) a group's own Captain password override -- Master Tools only,
  * works for any group regardless of whether its current password is known. Clearing falls back
  * to the shared app-wide default, not to "no password required." */
@@ -744,6 +875,23 @@ const saveHoleScore = async (year, groupId, matchId, hole, result) => {
     }
 };
 exports.saveHoleScore = saveHoleScore;
+/** Clears a single hole's result and, if Keep Score was used, its raw per-player scores too --
+ * the Finalize modal's "Cancel" option, for when the deciding hole was actually scored wrong. */
+const clearHoleScore = async (year, groupId, matchId, hole) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/clear-hole-score`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId, match: matchId, hole }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error clearing hole score:', error);
+        return false;
+    }
+};
+exports.clearHoleScore = clearHoleScore;
 /** Marks a match's scorer screen as opened (Start Match tapped) — shows as "in progress" to
  * anyone else viewing Session Matches, before the first hole is even recorded. Fire-and-forget:
  * a missed network blip here just means the in-progress warning doesn't show up for a moment,
@@ -812,6 +960,47 @@ const finalizeMatch = async (year, groupId, matchId, sessionId, matchScore, hole
     }
 };
 exports.finalizeMatch = finalizeMatch;
+/**
+ * Finalize a Total Score (stroke play) match via the API server -- sums each team's net total
+ * from the real saved gross scores server-side and returns the outcome (or an error, e.g. a hole
+ * that isn't fully entered yet).
+ */
+const finalizeStrokePlayMatch = async (year, groupId, matchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/finalize-stroke-play-match`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId, match: matchId }),
+        });
+        if (!response.ok) {
+            const body = (await response.json().catch(() => null));
+            return { ok: false, error: body?.error ?? "The match result didn't save — check your connection and try again." };
+        }
+        return { ok: true };
+    }
+    catch (error) {
+        console.error('Error finalizing stroke-play match:', error);
+        return { ok: false, error: "The match result didn't save — check your connection and try again." };
+    }
+};
+exports.finalizeStrokePlayMatch = finalizeStrokePlayMatch;
+/** Un-finalize a match -- the counterpart to finalizeMatch, for when a correction to an earlier
+ * hole means it's no longer actually decided. */
+const unfinalizeMatch = async (year, groupId, matchId) => {
+    try {
+        const response = await fetch(`${API_URL}/ryder/unfinalize-match`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ year, group: groupId, match: matchId }),
+        });
+        return response.ok;
+    }
+    catch (error) {
+        console.error('Error unfinalizing match:', error);
+        return false;
+    }
+};
+exports.unfinalizeMatch = unfinalizeMatch;
 const addPlayer = async (groupId, year, firstName, lastName, team, contact) => {
     try {
         const response = await fetch(`${API_URL}/ryder/players`, {

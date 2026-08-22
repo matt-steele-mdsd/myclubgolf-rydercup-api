@@ -4,12 +4,26 @@ exports.useMatchCelebration = useMatchCelebration;
 const react_1 = require("react");
 const apiService_1 = require("../services/apiService");
 const CURRENT_YEAR = new Date().getFullYear();
+/** The highest SessionID for the year, i.e. the last session -- shared by this hook (which
+ * excludes it) and useLastSessionCelebration (which is exclusively it), so the two never
+ * double-fire the same match. Returns null if there are no sessions yet. */
+async function getLastSessionId(groupId) {
+    const sessions = await (0, apiService_1.getSessionsForYear)(CURRENT_YEAR, groupId);
+    if (sessions.length === 0)
+        return null;
+    return Math.max(...sessions.map((s) => s.sessionId));
+}
 /**
  * Detects matches finishing while this screen is open (Show Results, Session Leaderboard, or
  * Scorecard) and queues them for a "Congratulations"/"Match Tied" celebration -- distinct from
  * useClinchCelebration, which is about the Cup as a whole. Only ever checks the current calendar
  * year, same reasoning as the clinch hook: this is a live-event notification, not something that
  * should fire while browsing an old, already-decided year.
+ *
+ * Excludes the LAST session's matches -- those are covered globally, on every screen, by
+ * useLastSessionCelebration instead (see its own doc comment for why). Without this exclusion a
+ * last-session match finishing while, say, Leaderboard is open would queue a celebration in BOTH
+ * hooks at once, showing the same popup twice in a row.
  *
  * Whatever's already completed as of this screen's first fetch is the baseline (not celebrated --
  * you only see a celebration for something that finishes while you're actually watching), so this
@@ -30,18 +44,23 @@ function useMatchCelebration(groupId, enabled) {
         if (!groupId || !enabled)
             return;
         let cancelled = false;
+        // Keyed matchId -> winner, not just a Set of matchIds, so a match whose winner is CORRECTED
+        // after it first finished (finalized for the wrong team, then re-scored) counts as a fresh
+        // event and re-fires the banner for the right team (confirmed with Matt 2026-08-09). A change
+        // that leaves the winner the same (e.g. only the margin edited) still doesn't re-fire.
         let seen = null;
         const check = () => {
-            (0, apiService_1.getRyderCompletedMatches)(CURRENT_YEAR, groupId).then((matches) => {
+            Promise.all([(0, apiService_1.getRyderCompletedMatches)(CURRENT_YEAR, groupId), getLastSessionId(groupId)]).then(([allMatches, lastSessionId]) => {
                 if (cancelled)
                     return;
+                const matches = allMatches.filter((m) => m.sessionId !== lastSessionId);
                 if (seen === null) {
-                    seen = new Set(matches.map((m) => m.matchId));
+                    seen = new Map(matches.map((m) => [m.matchId, m.winner]));
                     return;
                 }
-                const newlyCompleted = matches.filter((m) => !seen.has(m.matchId));
+                const newlyCompleted = matches.filter((m) => seen.get(m.matchId) !== m.winner);
                 if (newlyCompleted.length > 0) {
-                    newlyCompleted.forEach((m) => seen.add(m.matchId));
+                    newlyCompleted.forEach((m) => seen.set(m.matchId, m.winner));
                     setQueue((prev) => [...prev, ...newlyCompleted]);
                 }
             });

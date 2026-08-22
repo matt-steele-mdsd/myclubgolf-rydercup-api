@@ -148,7 +148,8 @@ app.get('/api/ryder/clinch-status', async (req, res) => {
 });
 // Running point totals over time (one entry per completed match, in recording order) plus the
 // winning-line thresholds -- see getRyderPointsTimeline. Feeds the collapsible points-progression
-// chart on Standings. Null when this year has no matches set up yet.
+// chart on Standings. Thresholds (not the whole response) are null until every session this year
+// has at least one match paired up.
 app.get('/api/ryder/points-timeline', async (req, res) => {
     try {
         const year = parseInt(req.query.year);
@@ -298,8 +299,8 @@ app.post('/api/ryder/sessions', async (req, res) => {
         if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
             return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
         }
-        if (format !== undefined && format !== null && !['B', 'A', 'C', 'O'].includes(format)) {
-            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), C (Scramble), or O (Other)' });
+        if (format !== undefined && format !== null && !['B', 'A', 'C', 'G', 'O'].includes(format)) {
+            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), C (Scramble), G (Aggregate), or O (Other)' });
         }
         if (scoringMethod !== undefined && scoringMethod !== null && !['M', 'S'].includes(scoringMethod)) {
             return res.status(400).json({ error: 'scoringMethod must be M (Match Play) or S (Total Score)' });
@@ -322,8 +323,8 @@ app.put('/api/ryder/sessions', async (req, res) => {
         if (teamSize !== undefined && teamSize !== null && ![2, 3, 4].includes(teamSize)) {
             return res.status(400).json({ error: 'teamSize must be 2, 3, or 4' });
         }
-        if (format !== undefined && format !== null && !['B', 'A', 'C', 'O'].includes(format)) {
-            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), C (Scramble), or O (Other)' });
+        if (format !== undefined && format !== null && !['B', 'A', 'C', 'G', 'O'].includes(format)) {
+            return res.status(400).json({ error: 'format must be B (Better Ball), A (Alternate Shot), C (Scramble), G (Aggregate), or O (Other)' });
         }
         if (scoringMethod !== undefined && scoringMethod !== null && !['M', 'S'].includes(scoringMethod)) {
             return res.status(400).json({ error: 'scoringMethod must be M (Match Play) or S (Total Score)' });
@@ -640,7 +641,7 @@ app.post('/api/ryder/options', async (req, res) => {
     try {
         // womenHandicapHoles defaults to true when the request omits it -- so an older client that
         // doesn't know the field can't silently turn women's handicap holes off on save.
-        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes, womenHandicapHoles = true, teamAFlag = 'usa', teamBFlag = 'euro', } = req.body;
+        const { groupId, handicapsEnabled, keepScoreEnabled, altShotLowPct, altShotHighPct, nineHoleHalfStrokes, womenHandicapHoles = true, playAllHoles = false, teamAFlag = 'usa', teamBFlag = 'euro', } = req.body;
         if (!groupId)
             return res.status(400).json({ error: 'groupId is required' });
         const lowPct = altShotLowPct ?? 60;
@@ -662,6 +663,7 @@ app.post('/api/ryder/options', async (req, res) => {
             altShotHighPct: highPct,
             nineHoleHalfStrokes: !!nineHoleHalfStrokes,
             womenHandicapHoles: !!womenHandicapHoles,
+            playAllHoles: !!playAllHoles,
             teamAFlag,
             teamBFlag,
         });
@@ -804,6 +806,24 @@ app.get('/api/ryder/match-hole-scores', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch match hole scores' });
     }
 });
+// Every hole's already-entered gross scores in one request (Total Score / stroke play matches --
+// running/final total display)
+app.get('/api/ryder/match-all-hole-scores', async (req, res) => {
+    try {
+        const year = parseInt(req.query.year);
+        const groupId = parseInt(req.query.group || '1');
+        const matchId = parseInt(req.query.match);
+        if (!year || !matchId) {
+            return res.status(400).json({ error: 'year and match query params are required' });
+        }
+        const scores = await (0, ryderService_1.getMatchAllHoleScores)(year, groupId, matchId);
+        res.json(scores);
+    }
+    catch (error) {
+        console.error('Error fetching all match hole scores:', error.message);
+        res.status(500).json({ error: 'Failed to fetch all match hole scores' });
+    }
+});
 // Save every player's gross score for one hole in one go (Keep Score mode)
 app.post('/api/ryder/match-hole-scores', async (req, res) => {
     try {
@@ -911,6 +931,25 @@ app.post('/api/ryder/finalize-match', async (req, res) => {
     catch (error) {
         console.error('Error finalizing match:', error.message);
         res.status(500).json({ error: 'Failed to finalize match' });
+    }
+});
+// Finalize a Total Score (stroke play) match -- sums each team's net total from the real saved
+// gross scores server-side, same "never trust the client" approach as finalize-match
+app.post('/api/ryder/finalize-stroke-play-match', async (req, res) => {
+    try {
+        const { year, group, match, user } = req.body;
+        if (!year || !match) {
+            return res.status(400).json({ error: 'year and match are required' });
+        }
+        const result = await (0, ryderService_1.finalizeStrokePlayMatch)(year, group || 1, match, user || 'app');
+        if (!result.ok) {
+            return res.status(400).json({ error: result.error });
+        }
+        res.json({ status: 'ok' });
+    }
+    catch (error) {
+        console.error('Error finalizing stroke-play match:', error.message);
+        res.status(500).json({ error: 'Failed to finalize stroke-play match' });
     }
 });
 // Un-finalize a match -- a correction to an earlier hole made it no longer actually decided

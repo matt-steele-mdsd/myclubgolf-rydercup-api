@@ -7,6 +7,9 @@
  *
  * Confirmed with Matt 2026-08-06:
  * - Better Ball: everyone plays off the match's lowest Course Handicap (fixed, not a setting).
+ * - Aggregate (2026-08-17): same stroke rule as Better Ball -- each player strokes off their own
+ *   Course Handicap relative to the match's lowest -- only how the two teammates' net scores
+ *   combine into a team hole score differs (summed instead of best-of, see computeTeamNet).
  * - Alternate Shot: each team's Course Handicap = altShotLowPct% of its lower-handicap partner
  *   + altShotHighPct% of its higher-handicap partner (defaults 60/40), then the two teams'
  *   Course Handicaps are compared exactly like two players would be.
@@ -22,7 +25,7 @@ exports.computeMatchStrokes = computeMatchStrokes;
 exports.computeHandicapStrokesPerPlayer = computeHandicapStrokesPerPlayer;
 exports.buildStrokeSummaryLines = buildStrokeSummaryLines;
 exports.getScoringUnits = getScoringUnits;
-exports.computeTeamBestNet = computeTeamBestNet;
+exports.computeTeamNet = computeTeamNet;
 exports.computeHoleWinnerFromScores = computeHoleWinnerFromScores;
 /**
  * A side's (player's or team's) Course Handicap, adjusted for a Front-9/Back-9 session.
@@ -250,14 +253,16 @@ function getScoringUnits(players, format) {
     return players.map((p) => ({ key: `player-${p.playerId}`, label: p.name, team: p.team, playerIds: [p.playerId] }));
 }
 /**
- * A team's best (lowest) net score for one hole among its scoring units (for Better Ball/Other/
- * Singles, "best of its players"; for Alternate Shot, trivially its one shared team score),
- * net = gross - strokes on that hole (0 if Handicaps is off, or always for an 'O' session).
+ * A team's combined net score for one hole among its scoring units, net = gross - strokes on
+ * that hole (0 if Handicaps is off, or always for an 'O' session). For Aggregate ('G') that's the
+ * SUM of both teammates' net scores -- the whole point of the format is that both scores count,
+ * not just the better one. For every other format it's the MINIMUM (best-of-its-players for
+ * Better Ball/Other/Singles; trivially its one shared team score for Alternate Shot/Scramble).
  * Returns null if any unit on this side hasn't entered a score for this hole yet. Shared by
  * `computeHoleWinnerFromScores` (match play, per hole) and stroke-play finalize (server-side,
  * summed across every hole) -- see `finalizeStrokePlayMatch` in ryderService.ts.
  */
-function computeTeamBestNet(units, team, grossScores, strokesThisHole) {
+function computeTeamNet(units, team, grossScores, strokesThisHole, format) {
     const teamUnits = units.filter((u) => u.team === team);
     if (teamUnits.length === 0)
         return null;
@@ -270,16 +275,17 @@ function computeTeamBestNet(units, team, grossScores, strokesThisHole) {
     });
     if (nets.some((n) => n === null))
         return null;
-    return Math.min(...nets);
+    const numNets = nets;
+    return format === 'G' ? numNets.reduce((sum, n) => sum + n, 0) : Math.min(...numNets);
 }
 /**
  * Work out which team won a hole from entered gross scores -- returns null if either side hasn't
  * entered a score for this hole yet, the caller should treat that as "not decided yet", not as a
  * halved hole.
  */
-function computeHoleWinnerFromScores(units, grossScores, strokesThisHole) {
-    const uNet = computeTeamBestNet(units, 'U', grossScores, strokesThisHole);
-    const eNet = computeTeamBestNet(units, 'E', grossScores, strokesThisHole);
+function computeHoleWinnerFromScores(units, grossScores, strokesThisHole, format) {
+    const uNet = computeTeamNet(units, 'U', grossScores, strokesThisHole, format);
+    const eNet = computeTeamNet(units, 'E', grossScores, strokesThisHole, format);
     if (uNet === null || eNet === null)
         return null;
     if (uNet < eNet)

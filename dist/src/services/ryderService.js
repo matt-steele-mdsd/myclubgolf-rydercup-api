@@ -73,6 +73,7 @@ exports.getMatchLink = getMatchLink;
 exports.saveMatchLink = saveMatchLink;
 exports.unlinkMatch = unlinkMatch;
 exports.getMatchHoleScores = getMatchHoleScores;
+exports.getMatchAllHoleScores = getMatchAllHoleScores;
 exports.saveMatchHoleScores = saveMatchHoleScores;
 exports.getMatchPairing = getMatchPairing;
 exports.saveMatchPairing = saveMatchPairing;
@@ -420,8 +421,12 @@ async function createSession(groupId, year, name, type, holes, teamSize, format,
     const sessionId = rows[0].nextId;
     const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
     const resolvedFormat = type === 'T' ? (format ?? 'O') : null;
-    const resolvedScoringMethod = type === 'T' ? (scoringMethod ?? 'M') : null;
-    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Format, ScoringMethod, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, resolvedFormat, resolvedScoringMethod ?? 'M', holes, courseId, SCORER_NAME]);
+    // Unlike teamSize/format, ScoringMethod applies to Individual sessions too -- Singles can be
+    // Match Play (hole-by-hole, the historical default) or Total Score (round-total) exactly like
+    // a Team session, since the underlying math (getScoringUnits/computeTeamNet/computeMatchStrokes)
+    // was already format/team-size-agnostic from the start. Confirmed with Matt 2026-08-20.
+    const resolvedScoringMethod = scoringMethod ?? 'M';
+    await config_1.default.query('INSERT INTO RyderSession (GroupID, RyderYear, SessionID, Name, Type, TeamSize, Format, ScoringMethod, Holes, CourseID, LastUpdateUser) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [groupId, year, sessionId, name, type, resolvedTeamSize, resolvedFormat, resolvedScoringMethod, holes, courseId, SCORER_NAME]);
     let courseName = null;
     if (courseId !== null) {
         const [courseRows] = await config_1.default.query('SELECT CourseName FROM Course WHERE CourseID = ?', [courseId]);
@@ -441,7 +446,8 @@ async function createSession(groupId, year, name, type, holes, teamSize, format,
 async function updateSession(groupId, year, sessionId, name, type, holes, teamSize, format, courseId, scoringMethod = 'M') {
     const resolvedTeamSize = type === 'T' ? (teamSize ?? 2) : null;
     const resolvedFormat = type === 'T' ? (format ?? 'O') : null;
-    const resolvedScoringMethod = type === 'T' ? (scoringMethod ?? 'M') : 'M';
+    // See createSession's identical comment -- ScoringMethod isn't Team-only.
+    const resolvedScoringMethod = scoringMethod ?? 'M';
     await config_1.default.query('UPDATE RyderSession SET Name = ?, Type = ?, TeamSize = ?, Format = ?, ScoringMethod = ?, Holes = ?, CourseID = ?, LastUpdateUser = ? WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [name, type, resolvedTeamSize, resolvedFormat, resolvedScoringMethod, holes, courseId, SCORER_NAME, groupId, year, sessionId]);
 }
 /**
@@ -698,12 +704,13 @@ async function getClinchStatus(year, groupId) {
  * actually recorded (LastUpdateDt) -- for the collapsible points-progression chart on Standings.
  * Same replay pattern as getRyderClinchInfo, but keeps every step instead of stopping at the
  * clinch. Thresholds are included so the chart can draw the winning line at the correct height
- * without a second request. Null when this year has no matches set up at all yet.
+ * without a second request, but are null (not the whole response) whenever they can't be computed
+ * yet -- confirmed real, Matt 2026-08-17: with sessions still being set up (no matches paired up
+ * yet), this used to return null outright, which the client read as "still loading" forever
+ * instead of "no winning line yet, but here's the race so far."
  */
 async function getRyderPointsTimeline(year, groupId) {
     const thresholds = await getClinchThresholds(year, groupId);
-    if (!thresholds)
-        return null;
     const [resultRows] = await config_1.default.query(`SELECT MatchID, Winner, Points, LastUpdateDt
      FROM RyderMatchResults
      WHERE RyderYear = ? AND GroupID = ?
@@ -719,7 +726,7 @@ async function getRyderPointsTimeline(year, groupId) {
             euroPoints += pts;
         points.push({ matchId: r.MatchID, timestamp: r.LastUpdateDt, usaPoints, euroPoints });
     }
-    return { points, usaThreshold: thresholds.usaThreshold, euroThreshold: thresholds.euroThreshold };
+    return { points, usaThreshold: thresholds?.usaThreshold ?? null, euroThreshold: thresholds?.euroThreshold ?? null };
 }
 /**
  * Every completed match for the year, in the order they were actually recorded (LastUpdateDt) --
@@ -1120,7 +1127,7 @@ async function getGenderedHoleRankings(courseId, holeNumbers) {
  * recorded so a match already underway resumes where it left off).
  */
 async function getMatchSetup(year, groupId, matchId) {
-    const [matchRows] = await config_1.default.query(`SELECT rm.Team, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
+    const [matchRows] = await config_1.default.query(`SELECT rm.Team, rm.CourseID, CONCAT(rp.FirstName, ' ', rp.LastName) AS name
      FROM RyderMatch rm
      INNER JOIN RyderPlayer rp ON rp.PlayerID = rm.PlayerID AND rp.GroupID = rm.GroupID
      WHERE rm.RyderYear = ? AND rm.GroupID = ? AND rm.MatchID = ?
@@ -1134,13 +1141,28 @@ async function getMatchSetup(year, groupId, matchId) {
     const usaPlayers = matchRows.filter((r) => r.Team === 'U').map((r) => r.name).join(' & ');
     const euroPlayers = matchRows.filter((r) => r.Team === 'E').map((r) => r.name).join(' & ');
     const holeNumbers = holeNumbersFor(holesSetting);
-    const eventCourse = await getEventCourse(groupId, year);
-    const courseId = eventCourse?.courseId ?? 1;
+    // This match's own assigned course (RyderMatch.CourseID) -- NOT getEventCourse, which is a
+    // single event-wide "the" course left over from before multi-course events existed. A
+    // multi-course event (different CourseID per session, e.g. Jester Cup: The Fort for sessions
+    // 1-3, Purgatory for 4-6, Reid Park for session 7) was silently showing every match's par/hdcp
+    // from whatever course getEventCourse happened to return, regardless of which course that
+    // match was actually being played on. getMatchPairing already gets this right (reads
+    // rm.CourseID first, only falls back to getEventCourse if the match has no rows yet) --
+    // getMatchSetup just never got the same fix. Confirmed real, Matt 2026-08-21: Session 4's
+    // match 10 (Purgatory, hole 5 = Par 5/Hdcp 6) was showing Par 3/Hdcp 11 -- The Fort's actual
+    // hole 5 -- and every score on it looked wrong (8s and 6s) because of it.
+    const courseId = matchRows[0]?.CourseID ?? (await getEventCourse(groupId, year))?.courseId ?? 1;
     const [courseRows] = await config_1.default.query('SELECT HoleNum, Par, OrigHdcp FROM CourseDetails WHERE CourseID = ? AND HoleNum IN (?)', [courseId, holeNumbers]);
     const courseByHole = new Map(courseRows.map((r) => [r.HoleNum, { par: r.Par, hdcp: r.OrigHdcp }]));
     const genderedHdcps = await getGenderedHoleRankings(courseId, holeNumbers);
     const [scoreRows] = await config_1.default.query('SELECT HoleID, Result FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
     const resultByHole = new Map(scoreRows.map((r) => [r.HoleID, r.Result]));
+    // Total Score only -- how many distinct players have a saved gross score per hole, compared
+    // against the match's real player count, to know when a hole's fully entered. Cheap even for
+    // match play (an empty/unused result set there, since match play doesn't call this).
+    const [grossCountRows] = await config_1.default.query('SELECT HoleID, COUNT(DISTINCT PlayerID) AS cnt FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ? GROUP BY HoleID', [year, groupId, matchId]);
+    const grossCountByHole = new Map(grossCountRows.map((r) => [r.HoleID, Number(r.cnt)]));
+    const playerCount = matchRows.length;
     const winnerFor = (result) => {
         if (result === undefined)
             return null;
@@ -1159,6 +1181,7 @@ async function getMatchSetup(year, groupId, matchId) {
             hdcpMale: genderedHdcps.male.get(hole) ?? null,
             hdcpFemale: genderedHdcps.female.get(hole) ?? null,
             result: winnerFor(resultByHole.get(hole)),
+            grossEntered: playerCount > 0 && (grossCountByHole.get(hole) ?? 0) >= playerCount,
         };
     });
     const displayNumbers = await getMatchDisplayNumbers(year, groupId);
@@ -1279,9 +1302,36 @@ async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, ho
     const realSessionId = (await getMatchSessionId(year, groupId, matchId)) ?? sessionId;
     const [sessionRows] = await config_1.default.query('SELECT Holes FROM RyderSession WHERE GroupID = ? AND RyderYear = ? AND SessionID = ?', [groupId, year, realSessionId]);
     const totalHoles = holeNumbersFor((sessionRows[0]?.Holes ?? 'F')).length;
-    const [scoreRows] = await config_1.default.query('SELECT Result FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
-    const realMatchScore = scoreRows.reduce((sum, r) => sum + Number(r.Result), 0);
-    const realHolesRemaining = Math.max(0, totalHoles - scoreRows.length);
+    const [scoreRows] = await config_1.default.query('SELECT Result FROM RyderMatchScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ? ORDER BY HoleID', [year, groupId, matchId]);
+    // Walk holes in order and stop at the FIRST point the match is actually mathematically decided
+    // -- with Play All Holes on (see RyderOptions), a group can keep recording holes after that
+    // point (some like to finish the round anyway), and those bonus holes must never change the
+    // official saved result. A blind sum-everything (the old behavior here) would silently let a
+    // trailing team's late comeback on meaningless extra holes overwrite a match that was really
+    // decided earlier. Confirmed real, Matt 2026-08-20: real historical data had exactly this --
+    // every hole recorded even past the deciding one. Client mirrors this same scan (rydermatch.tsx's
+    // decidedAt) purely for display; this is what actually gets saved regardless of what any client
+    // sends, matching this function's existing "never trust the client" approach.
+    let realMatchScore = 0;
+    let realHolesRemaining = 0;
+    let decided = false;
+    let running = 0;
+    for (let i = 0; i < scoreRows.length; i++) {
+        running += Number(scoreRows[i].Result);
+        const left = totalHoles - i - 1;
+        if (Math.abs(running) > left || left === 0) {
+            realMatchScore = running;
+            realHolesRemaining = left;
+            decided = true;
+            break;
+        }
+    }
+    if (!decided) {
+        // Not decided by the real recorded holes at all -- fall back to the plain sum (e.g. Finalize
+        // tapped on an incomplete match some other way).
+        realMatchScore = scoreRows.reduce((sum, r) => sum + Number(r.Result), 0);
+        realHolesRemaining = Math.max(0, totalHoles - scoreRows.length);
+    }
     let winner;
     let points;
     let resultText;
@@ -1307,10 +1357,10 @@ async function saveMatchResult(year, groupId, matchId, sessionId, matchScore, ho
      ON DUPLICATE KEY UPDATE SessionID = ?, Winner = ?, Points = ?, Result = ?`, [year, groupId, matchId, realSessionId, winner, points, resultText, SCORER_NAME, realSessionId, winner, points, resultText]);
 }
 /**
- * Finalize a Total Score (stroke play) match -- sums each team's best-ball net total across
- * every hole (same "lowest net among the team's scoring units" math match play uses per hole,
- * see computeTeamBestNet in strokeAllocation.ts, just summed instead of compared-and-flagged
- * hole by hole) and writes the outcome into the exact same RyderMatchResults columns
+ * Finalize a Total Score (stroke play) match -- sums each team's per-hole net total across
+ * every hole (same math match play uses per hole to get a team's net, see computeTeamNet in
+ * strokeAllocation.ts, just summed instead of compared-and-flagged hole by hole) and writes the
+ * outcome into the exact same RyderMatchResults columns
  * saveMatchResult uses for match play, so session points/clinch/leaderboard/player stats need no
  * changes at all -- they already read Winner/Points generically. Recomputes everything itself
  * from the real saved RyderMatchPlayerScore/tee data server-side rather than trusting a client
@@ -1354,8 +1404,8 @@ async function finalizeStrokePlayMatch(year, groupId, matchId, user) {
         const strokesThisHole = {};
         for (const p of tees.players)
             strokesThisHole[p.playerId] = allocation?.get(p.playerId)?.[h.hole] ?? 0;
-        const uNet = (0, strokeAllocation_1.computeTeamBestNet)(scoringUnits, 'U', grossScores, strokesThisHole);
-        const eNet = (0, strokeAllocation_1.computeTeamBestNet)(scoringUnits, 'E', grossScores, strokesThisHole);
+        const uNet = (0, strokeAllocation_1.computeTeamNet)(scoringUnits, 'U', grossScores, strokesThisHole, tees.format);
+        const eNet = (0, strokeAllocation_1.computeTeamNet)(scoringUnits, 'E', grossScores, strokesThisHole, tees.format);
         if (uNet === null || eNet === null) {
             return { ok: false, error: `Hole ${h.hole} hasn't been fully scored yet.` };
         }
@@ -1656,11 +1706,12 @@ const DEFAULT_RYDER_OPTIONS = {
     altShotHighPct: 40,
     nineHoleHalfStrokes: false,
     womenHandicapHoles: true,
+    playAllHoles: false,
     teamAFlag: 'usa',
     teamBFlag: 'euro',
 };
 async function getRyderOptions(groupId) {
-    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles, TeamAFlag, TeamBFlag FROM RyderOptions WHERE GroupID = ?', [groupId]);
+    const [rows] = await config_1.default.query('SELECT HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles, PlayAllHoles, TeamAFlag, TeamBFlag FROM RyderOptions WHERE GroupID = ?', [groupId]);
     if (rows.length === 0)
         return DEFAULT_RYDER_OPTIONS;
     const r = rows[0];
@@ -1672,15 +1723,16 @@ async function getRyderOptions(groupId) {
         altShotHighPct: r.AltShotHighPct,
         nineHoleHalfStrokes: !!r.NineHoleHalfStrokes,
         womenHandicapHoles: !!r.WomenHandicapHoles,
+        playAllHoles: !!r.PlayAllHoles,
         teamAFlag: r.TeamAFlag === 'crown' ? 'crown' : 'usa',
         teamBFlag: r.TeamBFlag === 'jester' ? 'jester' : 'euro',
     };
 }
 async function saveRyderOptions(groupId, options) {
-    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles, TeamAFlag, TeamBFlag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    await config_1.default.query(`INSERT INTO RyderOptions (GroupID, HandicapsEnabled, KeepScoreEnabled, BestBallLowestHandicap, AltShotLowPct, AltShotHighPct, NineHoleHalfStrokes, WomenHandicapHoles, PlayAllHoles, TeamAFlag, TeamBFlag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE HandicapsEnabled = VALUES(HandicapsEnabled), KeepScoreEnabled = VALUES(KeepScoreEnabled),
        BestBallLowestHandicap = VALUES(BestBallLowestHandicap), AltShotLowPct = VALUES(AltShotLowPct), AltShotHighPct = VALUES(AltShotHighPct),
-       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes), WomenHandicapHoles = VALUES(WomenHandicapHoles),
+       NineHoleHalfStrokes = VALUES(NineHoleHalfStrokes), WomenHandicapHoles = VALUES(WomenHandicapHoles), PlayAllHoles = VALUES(PlayAllHoles),
        TeamAFlag = VALUES(TeamAFlag), TeamBFlag = VALUES(TeamBFlag)`, [
         groupId,
         options.handicapsEnabled ? 1 : 0,
@@ -1691,6 +1743,7 @@ async function saveRyderOptions(groupId, options) {
         options.altShotHighPct,
         options.nineHoleHalfStrokes ? 1 : 0,
         options.womenHandicapHoles ? 1 : 0,
+        options.playAllHoles ? 1 : 0,
         options.teamAFlag === 'crown' ? 'crown' : 'usa',
         options.teamBFlag === 'jester' ? 'jester' : 'euro',
     ]);
@@ -1831,6 +1884,20 @@ async function getMatchHoleScores(year, groupId, matchId, holeId) {
     const scores = {};
     for (const r of rows)
         scores[r.PlayerID] = r.Score;
+    return scores;
+}
+/** Every hole's gross scores in one request -- holeNumber -> playerId -> score. Total Score
+ * (stroke play) matches use this to show a running/final total across every hole without one
+ * request per hole (getMatchHoleScores is per-hole, fine for match play's "just this hole"
+ * need, too chatty for stroke play's "every hole, every time a score changes"). */
+async function getMatchAllHoleScores(year, groupId, matchId) {
+    const [rows] = await config_1.default.query('SELECT HoleID, PlayerID, Score FROM RyderMatchPlayerScore WHERE RyderYear = ? AND GroupID = ? AND MatchID = ?', [year, groupId, matchId]);
+    const scores = {};
+    for (const r of rows) {
+        if (!scores[r.HoleID])
+            scores[r.HoleID] = {};
+        scores[r.HoleID][r.PlayerID] = r.Score;
+    }
     return scores;
 }
 /** Save every player's gross score for one hole in one go (Alternate Shot saves the same score
